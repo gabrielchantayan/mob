@@ -3,9 +3,11 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gabe/mob/internal/agent"
@@ -18,6 +20,7 @@ type ToolContext struct {
 	Registry *registry.Registry
 	Spawner  *agent.Spawner
 	MobDir   string
+	TaskWg   *sync.WaitGroup // Track background tasks for graceful shutdown
 }
 
 // ToolHandler is a function that executes a tool
@@ -299,7 +302,10 @@ func handleSpawnAssociate(ctx *ToolContext, args map[string]interface{}) (string
 	}
 
 	// Execute the task in a background goroutine
+	ctx.TaskWg.Add(1)
 	go func(a *agent.Agent, agentID string, taskDesc string, reg *registry.Registry) {
+		defer ctx.TaskWg.Done()
+
 		// Update status to working
 		reg.UpdateStatus(agentID, "working")
 
@@ -308,6 +314,7 @@ func handleSpawnAssociate(ctx *ToolContext, args map[string]interface{}) (string
 
 		// Update status based on result
 		if err != nil {
+			log.Printf("Associate %s failed: %v", agentID, err)
 			reg.UpdateStatus(agentID, "failed")
 		} else {
 			reg.UpdateStatus(agentID, "completed")

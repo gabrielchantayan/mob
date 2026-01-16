@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 
 	"github.com/gabe/mob/internal/agent"
 	"github.com/gabe/mob/internal/registry"
@@ -17,6 +18,7 @@ type Server struct {
 	spawner  *agent.Spawner
 	mobDir   string
 	tools    map[string]*Tool
+	taskWg   sync.WaitGroup // Track background tasks
 }
 
 // NewServer creates a new MCP server
@@ -120,6 +122,8 @@ func (s *Server) Run() error {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
+				// Wait for any background tasks to complete before exiting
+				s.taskWg.Wait()
 				return nil
 			}
 			return fmt.Errorf("error reading input: %w", err)
@@ -228,6 +232,7 @@ func (s *Server) handleToolsCall(req *jsonRPCRequest) *jsonRPCResponse {
 		Registry: s.registry,
 		Spawner:  s.spawner,
 		MobDir:   s.mobDir,
+		TaskWg:   &s.taskWg,
 	}
 
 	result, err := tool.Handler(ctx, params.Arguments)
