@@ -585,6 +585,12 @@ func handleSpawnSoldati(ctx *ToolContext, args map[string]interface{}) (string, 
 		return "", fmt.Errorf("failed to create soldati: %w", err)
 	}
 
+	// Assign the soldati to the specified turf
+	if err := mgr.AssignTurf(name, turf); err != nil {
+		mgr.Delete(name) // Clean up on failure
+		return "", fmt.Errorf("failed to assign turf: %w", err)
+	}
+
 	// Generate MCP config for tool access
 	mcpConfigPath, err := GenerateMCPConfig(ctx.MobDir)
 	if err != nil {
@@ -775,6 +781,13 @@ func handleListAgents(ctx *ToolContext, args map[string]interface{}) (string, er
 		return "No agents on the payroll right now.", nil
 	}
 
+	// Get soldati manager to fetch turf assignments
+	soldatiDir := filepath.Join(ctx.MobDir, "soldati")
+	soldatiMgr, err := soldati.NewManager(soldatiDir)
+	if err != nil {
+		log.Printf("Warning: failed to create soldati manager: %v", err)
+	}
+
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("The crew (%d members):\n\n", len(agents)))
 
@@ -785,6 +798,20 @@ func handleListAgents(ctx *ToolContext, args map[string]interface{}) (string, er
 		}
 		sb.WriteString(fmt.Sprintf("- %s [%s] (ID: %s)\n", name, a.Type, a.ID))
 		sb.WriteString(fmt.Sprintf("  Turf: %s, Status: %s\n", a.Turf, a.Status))
+
+		// For soldati, show turf assignments
+		if a.Type == "soldati" && soldatiMgr != nil && a.Name != "" {
+			if s, err := soldatiMgr.Get(a.Name); err == nil {
+				if len(s.Turfs) > 0 {
+					sb.WriteString(fmt.Sprintf("  Assigned turfs: %s", strings.Join(s.Turfs, ", ")))
+					if s.PrimaryTurf != "" {
+						sb.WriteString(fmt.Sprintf(" (primary: %s)", s.PrimaryTurf))
+					}
+					sb.WriteString("\n")
+				}
+			}
+		}
+
 		if a.Task != "" {
 			sb.WriteString(fmt.Sprintf("  Current job: %s\n", truncate(a.Task, 60)))
 		}
