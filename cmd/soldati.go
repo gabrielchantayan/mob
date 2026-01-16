@@ -7,6 +7,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/gabe/mob/internal/registry"
 	"github.com/gabe/mob/internal/soldati"
 	"github.com/spf13/cobra"
 )
@@ -45,8 +46,16 @@ var soldatiListCmd = &cobra.Command{
 			return
 		}
 
+		// Get runtime status from registry
+		reg := registry.New(getRegistryPath())
+		activeAgents, _ := reg.ListByType("soldati")
+		agentStatus := make(map[string]*registry.AgentRecord)
+		for _, a := range activeAgents {
+			agentStatus[a.Name] = a
+		}
+
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "NAME\tTASKS\tSUCCESS\tLAST ACTIVE")
+		fmt.Fprintln(w, "NAME\tSTATUS\tTASK\tTASKS\tSUCCESS\tLAST ACTIVE")
 		for _, s := range list {
 			tasks := s.Stats.TasksCompleted + s.Stats.TasksFailed
 			successStr := "-"
@@ -54,7 +63,22 @@ var soldatiListCmd = &cobra.Command{
 				successStr = fmt.Sprintf("%.0f%%", s.Stats.SuccessRate*100)
 			}
 			lastActive := time.Since(s.LastActive).Round(time.Minute).String() + " ago"
-			fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", s.Name, tasks, successStr, lastActive)
+
+			// Check runtime status
+			status := "idle"
+			task := "-"
+			if agent, ok := agentStatus[s.Name]; ok {
+				status = agent.Status
+				if agent.Task != "" {
+					task = truncateStr(agent.Task, 30)
+				}
+				// Use registry's last ping if more recent
+				if agent.LastPing.After(s.LastActive) {
+					lastActive = time.Since(agent.LastPing).Round(time.Minute).String() + " ago"
+				}
+			}
+
+			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n", s.Name, status, task, tasks, successStr, lastActive)
 		}
 		w.Flush()
 	},
@@ -116,6 +140,12 @@ var soldatiKillCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		// Also remove from registry if present
+		reg := registry.New(getRegistryPath())
+		if agent, err := reg.GetByName(name); err == nil {
+			reg.Unregister(agent.ID) // Ignore errors
+		}
+
 		fmt.Printf("Killed soldati '%s'\n", name)
 	},
 }
@@ -126,6 +156,18 @@ func getSoldatiDir() (string, error) {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 	return filepath.Join(home, "mob", "soldati"), nil
+}
+
+func getRegistryPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, "mob", ".mob", "agents.json")
+}
+
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
 
 func init() {

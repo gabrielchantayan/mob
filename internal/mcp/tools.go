@@ -187,9 +187,16 @@ func handleSpawnSoldati(ctx *ToolContext, args map[string]interface{}) (string, 
 		return "", fmt.Errorf("turf is required")
 	}
 
-	// Generate name if not provided
+	// Get soldati manager for persistent storage
+	soldatiDir := filepath.Join(ctx.MobDir, "soldati")
+	mgr, err := soldati.NewManager(soldatiDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to create soldati manager: %w", err)
+	}
+
+	// Generate name if not provided, checking both registry and TOML files
 	if name == "" {
-		// Get existing names to avoid duplicates
+		// Get existing names from registry
 		agents, err := ctx.Registry.ListByType("soldati")
 		if err != nil {
 			return "", fmt.Errorf("failed to list existing soldati: %w", err)
@@ -197,6 +204,11 @@ func handleSpawnSoldati(ctx *ToolContext, args map[string]interface{}) (string, 
 		usedNames := make([]string, 0, len(agents))
 		for _, a := range agents {
 			usedNames = append(usedNames, a.Name)
+		}
+		// Also check TOML files
+		existingSoldati, _ := mgr.List()
+		for _, s := range existingSoldati {
+			usedNames = append(usedNames, s.Name)
 		}
 		name = soldati.GenerateUniqueName(usedNames)
 	}
@@ -206,31 +218,41 @@ func handleSpawnSoldati(ctx *ToolContext, args map[string]interface{}) (string, 
 		workDir, _ = os.Getwd()
 	}
 
+	// Create persistent soldati record (TOML file)
+	_, err = mgr.Create(name)
+	if err != nil {
+		return "", fmt.Errorf("failed to create soldati: %w", err)
+	}
+
 	// Spawn the agent
-	agent, err := ctx.Spawner.SpawnWithOptions(agent.SpawnOptions{
+	spawnedAgent, err := ctx.Spawner.SpawnWithOptions(agent.SpawnOptions{
 		Type:    agent.AgentTypeSoldati,
 		Name:    name,
 		Turf:    turf,
 		WorkDir: workDir,
 	})
 	if err != nil {
+		// Clean up TOML file on failure
+		mgr.Delete(name)
 		return "", fmt.Errorf("failed to spawn soldati: %w", err)
 	}
 
 	// Register in registry
 	record := &registry.AgentRecord{
-		ID:        agent.ID,
+		ID:        spawnedAgent.ID,
 		Type:      "soldati",
 		Name:      name,
 		Turf:      turf,
 		Status:    "active",
-		StartedAt: agent.StartedAt,
+		StartedAt: spawnedAgent.StartedAt,
 	}
 	if err := ctx.Registry.Register(record); err != nil {
+		// Clean up on failure
+		mgr.Delete(name)
 		return "", fmt.Errorf("failed to register soldati: %w", err)
 	}
 
-	return fmt.Sprintf("Soldati '%s' is now on the payroll. ID: %s, Turf: %s", name, agent.ID, turf), nil
+	return fmt.Sprintf("Soldati '%s' is now on the payroll. ID: %s, Turf: %s", name, spawnedAgent.ID, turf), nil
 }
 
 func handleSpawnAssociate(ctx *ToolContext, args map[string]interface{}) (string, error) {
@@ -375,6 +397,14 @@ func handleKillAgent(ctx *ToolContext, args map[string]interface{}) (string, err
 	// Remove from registry
 	if err := ctx.Registry.Unregister(agent.ID); err != nil {
 		return "", fmt.Errorf("failed to unregister agent: %w", err)
+	}
+
+	// If this is a soldati, also remove the TOML file
+	if agent.Type == "soldati" && agent.Name != "" {
+		soldatiDir := filepath.Join(ctx.MobDir, "soldati")
+		if mgr, err := soldati.NewManager(soldatiDir); err == nil {
+			mgr.Delete(agent.Name) // Ignore errors - file might not exist
+		}
 	}
 
 	displayName := agent.Name

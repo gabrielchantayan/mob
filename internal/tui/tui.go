@@ -748,11 +748,11 @@ func (m Model) renderChatHistory() string {
 	var b strings.Builder
 	width := m.chatViewport.Width - 4
 
-	for _, msg := range m.chatMessages {
+	for i, msg := range m.chatMessages {
 		if msg.Role == "user" {
-			// User message with blue left accent bar
-			b.WriteString(m.renderUserMessage(msg.Content, width))
-			b.WriteString("\n\n")
+			// User message with blue left accent bar and background
+			b.WriteString(m.renderUserMessage(msg.Content, width, i == 0))
+			b.WriteString("\n")
 		} else {
 			// Assistant message with thinking, tool use, and text
 			b.WriteString(m.renderAssistantMessage(msg, width))
@@ -770,18 +770,52 @@ func (m Model) renderChatHistory() string {
 	return b.String()
 }
 
-func (m Model) renderUserMessage(content string, width int) string {
-	// Box-drawing border on the left (OpenCode style)
-	border := lipgloss.NewStyle().
+func (m Model) renderUserMessage(content string, width int, isFirst bool) string {
+	// OpenCode style: left border with background panel
+	// Structure: border | paddingLeft 2 | content
+
+	borderChar := lipgloss.NewStyle().
 		Foreground(secondaryColor).
 		Render("┃")
 
-	// Message content in white bold
-	lines := strings.Split(wrapText(content, width-4), "\n")
+	// Wrap text accounting for border (1) + padding (2) = 3 chars
+	wrapped := wrapText(content, width-5)
+	lines := strings.Split(wrapped, "\n")
+
+	// Build the inner content with padding
+	var inner strings.Builder
+	for i, line := range lines {
+		if i > 0 {
+			inner.WriteString("\n")
+		}
+		inner.WriteString(lipgloss.NewStyle().
+			Foreground(textColor).
+			Render(line))
+	}
+
+	// Create the content box with padding and background
+	contentBox := lipgloss.NewStyle().
+		Background(bgPanelColor).
+		PaddingTop(1).
+		PaddingBottom(1).
+		PaddingLeft(2).
+		Width(width - 1). // Account for border
+		Render(inner.String())
+
+	// Join border with content line by line
+	contentLines := strings.Split(contentBox, "\n")
 	var b strings.Builder
-	for _, line := range lines {
-		b.WriteString(fmt.Sprintf("%s %s\n", border,
-			lipgloss.NewStyle().Foreground(textColor).Bold(true).Render(line)))
+
+	// Add margin top if not first message
+	if !isFirst {
+		b.WriteString("\n")
+	}
+
+	for i, line := range contentLines {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(borderChar + line)
 	}
 
 	return b.String()
@@ -794,13 +828,30 @@ func (m Model) renderAssistantMessage(msg ChatMessage, width int) string {
 		b.WriteString(m.renderContentBlock(block, width))
 	}
 
-	// Footer with model and timing
+	// Footer with model and timing - OpenCode style: "▣ Mode · model · duration"
+	// paddingLeft 3 to match text parts
 	if msg.Model != "" || msg.DurationMs > 0 {
-		footer := fmt.Sprintf("■ %s · %.1fs",
-			formatModelName(msg.Model),
-			float64(msg.DurationMs)/1000.0)
-		b.WriteString(mutedStyle.Render(footer))
-		b.WriteString("\n")
+		// OpenCode uses colored square for agent, we'll use secondary color
+		square := lipgloss.NewStyle().
+			Foreground(secondaryColor).
+			Render("▣")
+
+		mode := lipgloss.NewStyle().
+			Foreground(textColor).
+			Render("Build") // Default mode
+
+		modelName := lipgloss.NewStyle().
+			Foreground(textMutedColor).
+			Render(" · " + formatModelName(msg.Model))
+
+		duration := ""
+		if msg.DurationMs > 0 {
+			duration = lipgloss.NewStyle().
+				Foreground(textMutedColor).
+				Render(fmt.Sprintf(" · %.1fs", float64(msg.DurationMs)/1000.0))
+		}
+
+		b.WriteString(fmt.Sprintf("\n   %s %s%s%s\n", square, mode, modelName, duration))
 	}
 
 	return b.String()
@@ -809,45 +860,40 @@ func (m Model) renderAssistantMessage(msg ChatMessage, width int) string {
 func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) string {
 	var b strings.Builder
 
-	// Box-drawing border character
+	// Box-drawing border character (OpenCode uses "┃")
 	borderChar := "┃"
 
 	switch block.Type {
 	case agent.ContentTypeThinking:
-		// Thinking block with orange border
+		// OpenCode: paddingLeft 2, marginTop 1, border left with backgroundElement color
 		border := lipgloss.NewStyle().
-			Foreground(primaryColor).
+			Foreground(bgElementColor). // Subtle border for thinking
 			Render(borderChar)
 
-		// Header: icon + "Thinking" or summary
-		header := iconThink + " "
+		// Header: "_Thinking:_" prefix like OpenCode
+		header := "_Thinking:_ "
 		if block.Summary != "" {
 			header += block.Summary
-		} else {
-			header += "Thinking..."
 		}
 		headerStyled := lipgloss.NewStyle().
-			Foreground(primaryColor).
+			Foreground(textMutedColor).
 			Italic(true).
 			Render(header)
 
-		b.WriteString(fmt.Sprintf("%s %s\n", border, headerStyled))
+		// marginTop 1
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("%s  %s\n", border, headerStyled))
 
-		// Thinking content (muted, wrapped)
+		// Thinking content (muted, wrapped) - paddingLeft 2 from border
 		if block.Text != "" {
-			lines := strings.Split(wrapText(block.Text, width-4), "\n")
+			lines := strings.Split(wrapText(block.Text, width-6), "\n")
 			for _, line := range lines {
-				b.WriteString(fmt.Sprintf("%s   %s\n", border, mutedStyle.Render(line)))
+				b.WriteString(fmt.Sprintf("%s  %s\n", border, mutedStyle.Render(line)))
 			}
 		}
-		b.WriteString(border + "\n") // Empty border line for spacing
 
 	case agent.ContentTypeToolUse:
-		// Tool use with appropriate icon
-		border := lipgloss.NewStyle().
-			Foreground(secondaryColor).
-			Render(borderChar)
-
+		// OpenCode InlineTool: paddingLeft 3, then paddingLeft 3 for text = 6 total
 		// Get tool icon
 		icon := toolIcons[block.Name]
 		if icon == "" {
@@ -857,31 +903,33 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 		// Tool header: icon + tool name
 		toolHeader := fmt.Sprintf("%s %s", icon, block.Name)
 		headerStyled := lipgloss.NewStyle().
-			Foreground(secondaryColor).
+			Foreground(textMutedColor).
 			Render(toolHeader)
-
-		b.WriteString(fmt.Sprintf("%s %s\n", border, headerStyled))
 
 		// Extract and display description from input
 		desc := extractToolDescription(block.Input)
+		descStyled := ""
 		if desc != "" {
 			// Truncate if too long
-			if len(desc) > width-6 {
-				desc = desc[:width-9] + "..."
+			if len(desc) > width-12 {
+				desc = desc[:width-15] + "..."
 			}
-			b.WriteString(fmt.Sprintf("%s   %s\n", border, mutedStyle.Render(desc)))
+			descStyled = " " + desc
 		}
-		b.WriteString(border + "\n")
+
+		// Inline format like OpenCode: icon name description
+		b.WriteString(fmt.Sprintf("      %s%s\n", headerStyled,
+			lipgloss.NewStyle().Foreground(textMutedColor).Render(descStyled)))
 
 	case agent.ContentTypeText:
-		// Main response text with subtle border
-		border := lipgloss.NewStyle().
-			Foreground(textMutedColor).
-			Render(borderChar)
+		// OpenCode TextPart: paddingLeft 3, marginTop 1
+		// marginTop 1
+		b.WriteString("\n")
 
-		lines := strings.Split(wrapText(block.Text, width-4), "\n")
+		lines := strings.Split(wrapText(block.Text, width-6), "\n")
 		for _, line := range lines {
-			b.WriteString(fmt.Sprintf("%s %s\n", border,
+			// paddingLeft 3
+			b.WriteString(fmt.Sprintf("   %s\n",
 				lipgloss.NewStyle().Foreground(textColor).Render(line)))
 		}
 	}
