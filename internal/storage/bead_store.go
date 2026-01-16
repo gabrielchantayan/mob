@@ -376,3 +376,145 @@ func (s *BeadStore) writeAllBeads(beads []*models.Bead) error {
 
 	return os.Rename(tmpFile, s.openFile)
 }
+
+// DependencyTree represents a bead and its dependencies
+type DependencyTree struct {
+	Bead      *models.Bead
+	BlockedBy []*DependencyTree
+	Blocking  []*DependencyTree
+}
+
+// GetBlockedBy returns all beads that block the given bead
+func (s *BeadStore) GetBlockedBy(beadID string) ([]*models.Bead, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	targetBead, err := s.get(beadID)
+	if err != nil {
+		return nil, err
+	}
+
+	// If this bead has no blockers, return empty list
+	if len(targetBead.Blocks) == 0 {
+		return []*models.Bead{}, nil
+	}
+
+	allBeads, err := s.readAllBeads()
+	if err != nil {
+		return nil, err
+	}
+
+	// Find all beads that list this bead in their Blocks field
+	blockers := []*models.Bead{}
+	for _, bead := range allBeads {
+		for _, blockedID := range bead.Blocks {
+			if blockedID == beadID {
+				blockers = append(blockers, bead)
+				break
+			}
+		}
+	}
+
+	return blockers, nil
+}
+
+// GetBlocking returns all beads that this bead blocks
+func (s *BeadStore) GetBlocking(beadID string) ([]*models.Bead, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	bead, err := s.get(beadID)
+	if err != nil {
+		return nil, err
+	}
+
+	// If this bead doesn't block anything, return empty list
+	if len(bead.Blocks) == 0 {
+		return []*models.Bead{}, nil
+	}
+
+	// Get all the beads this one blocks
+	blocking := []*models.Bead{}
+	for _, blockedID := range bead.Blocks {
+		blocked, err := s.get(blockedID)
+		if err != nil {
+			// Skip if bead not found (could be deleted)
+			continue
+		}
+		blocking = append(blocking, blocked)
+	}
+
+	return blocking, nil
+}
+
+// GetDependencyTree returns the full dependency tree for a bead
+func (s *BeadStore) GetDependencyTree(beadID string) (*DependencyTree, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	visited := make(map[string]bool)
+	return s.buildDependencyTree(beadID, visited)
+}
+
+// buildDependencyTree recursively builds the dependency tree
+func (s *BeadStore) buildDependencyTree(beadID string, visited map[string]bool) (*DependencyTree, error) {
+	// Prevent infinite loops
+	if visited[beadID] {
+		return nil, nil
+	}
+	visited[beadID] = true
+
+	bead, err := s.get(beadID)
+	if err != nil {
+		return nil, err
+	}
+
+	tree := &DependencyTree{
+		Bead:      bead,
+		BlockedBy: []*DependencyTree{},
+		Blocking:  []*DependencyTree{},
+	}
+
+	// Build blocked-by tree
+	allBeads, err := s.readAllBeads()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, b := range allBeads {
+		for _, blockedID := range b.Blocks {
+			if blockedID == beadID {
+				subtree, err := s.buildDependencyTree(b.ID, visited)
+				if err == nil && subtree != nil {
+					tree.BlockedBy = append(tree.BlockedBy, subtree)
+				}
+			}
+		}
+	}
+
+	// Build blocking tree
+	for _, blockedID := range bead.Blocks {
+		subtree, err := s.buildDependencyTree(blockedID, visited)
+		if err == nil && subtree != nil {
+			tree.Blocking = append(tree.Blocking, subtree)
+		}
+	}
+
+	return tree, nil
+}
+
+// get is an internal method that doesn't acquire locks (caller must hold lock)
+func (s *BeadStore) get(id string) (*models.Bead, error) {
+	beads, err := s.readAllBeads()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, bead := range beads {
+		if bead.ID == id {
+			return bead, nil
+		}
+	}
+
+	return nil, fmt.Errorf("bead not found: %s", id)
+}
