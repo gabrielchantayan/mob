@@ -81,14 +81,16 @@ func (m *Manager) Remove(name string) error {
 
 // List returns all registered turfs
 func (m *Manager) List() []models.Turf {
-	return m.config.Turfs
+	result := make([]models.Turf, len(m.config.Turfs))
+	copy(result, m.config.Turfs)
+	return result
 }
 
 // Get retrieves a turf by name
 func (m *Manager) Get(name string) (*models.Turf, error) {
-	for _, t := range m.config.Turfs {
-		if t.Name == name {
-			return &t, nil
+	for i := range m.config.Turfs {
+		if m.config.Turfs[i].Name == name {
+			return &m.config.Turfs[i], nil
 		}
 	}
 	return nil, fmt.Errorf("turf not found: %s", name)
