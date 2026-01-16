@@ -16,6 +16,7 @@ import (
 	"github.com/gabe/mob/internal/agent"
 	"github.com/gabe/mob/internal/daemon"
 	"github.com/gabe/mob/internal/models"
+	"github.com/gabe/mob/internal/registry"
 	"github.com/gabe/mob/internal/soldati"
 	"github.com/gabe/mob/internal/storage"
 	"github.com/gabe/mob/internal/underboss"
@@ -27,10 +28,11 @@ type tab int
 const (
 	tabChat tab = iota
 	tabLogs
+	tabAgents
 )
 
 // Tab names for display
-var tabNames = []string{"Chat", "Logs"}
+var tabNames = []string{"Chat", "Logs", "Agents"}
 
 // Layout constants
 const (
@@ -136,6 +138,9 @@ type Model struct {
 	currentBlocks   []agent.ChatContentBlock // Blocks being streamed
 	underboss       *underboss.Underboss
 	mobDir          string
+
+	// Agent records from registry
+	agentRecords []*registry.AgentRecord
 }
 
 // New creates a new TUI model
@@ -257,6 +262,13 @@ func (m *Model) loadData() {
 			}
 		}
 	}
+
+	// Load agent records from registry
+	reg := registry.New(registry.DefaultPath(mobDir))
+	agents, err := reg.List()
+	if err == nil {
+		m.agentRecords = agents
+	}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -359,6 +371,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateFocus()
 		case "2":
 			m.activeTab = tabLogs
+			m.updateFocus()
+		case "3":
+			m.activeTab = tabAgents
 			m.updateFocus()
 		case "s":
 			// Toggle sidebar (only if terminal is wide enough)
@@ -530,6 +545,8 @@ func (m Model) renderMainArea(width int) string {
 		b.WriteString(m.renderChat())
 	case tabLogs:
 		b.WriteString(m.renderLogs())
+	case tabAgents:
+		b.WriteString(m.renderAgents())
 	}
 
 	return lipgloss.NewStyle().
@@ -705,6 +722,75 @@ func (m Model) renderLogs() string {
 	return mutedStyle.Render("No logs yet")
 }
 
+func (m Model) renderAgents() string {
+	if len(m.agentRecords) == 0 {
+		return mutedStyle.Render("No active agents")
+	}
+
+	var b strings.Builder
+
+	// Header
+	header := fmt.Sprintf("  %-20s %-12s %-10s %-30s %s\n",
+		labelStyle.Render("Name"),
+		labelStyle.Render("Type"),
+		labelStyle.Render("Status"),
+		labelStyle.Render("Task"),
+		labelStyle.Render("Last Ping"))
+	b.WriteString(header)
+	b.WriteString(mutedStyle.Render(strings.Repeat("─", 90)))
+	b.WriteString("\n")
+
+	for _, agent := range m.agentRecords {
+		name := agent.Name
+		if name == "" {
+			name = agent.ID[:8]
+		}
+
+		// Status color
+		var statusStyled string
+		switch agent.Status {
+		case "active":
+			statusStyled = statusStyle.Render(agent.Status)
+		case "idle":
+			statusStyled = mutedStyle.Render(agent.Status)
+		case "stuck":
+			statusStyled = errorStyle.Render(agent.Status)
+		default:
+			statusStyled = mutedStyle.Render(agent.Status)
+		}
+
+		// Truncate task
+		task := agent.Task
+		if len(task) > 28 {
+			task = task[:25] + "..."
+		}
+
+		// Format last ping
+		lastPing := formatRelativeTime(agent.LastPing)
+
+		row := fmt.Sprintf("  %-20s %-12s %-10s %-30s %s\n",
+			valueStyle.Render(name),
+			mutedStyle.Render(agent.Type),
+			statusStyled,
+			valueStyle.Render(task),
+			mutedStyle.Render(lastPing))
+		b.WriteString(row)
+	}
+
+	return b.String()
+}
+
+func formatRelativeTime(t time.Time) string {
+	d := time.Since(t)
+	if d < time.Minute {
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%dh ago", int(d.Hours()))
+}
+
 func (m Model) renderChat() string {
 	var b strings.Builder
 
@@ -776,6 +862,7 @@ func (m Model) renderUserMessage(content string, width int, isFirst bool) string
 
 	borderChar := lipgloss.NewStyle().
 		Foreground(secondaryColor).
+		Background(bgPanelColor).
 		Render("┃")
 
 	// Wrap text accounting for border (1) + padding (2) = 3 chars
@@ -790,6 +877,7 @@ func (m Model) renderUserMessage(content string, width int, isFirst bool) string
 		}
 		inner.WriteString(lipgloss.NewStyle().
 			Foreground(textColor).
+			Background(bgPanelColor).
 			Render(line))
 	}
 
@@ -834,20 +922,24 @@ func (m Model) renderAssistantMessage(msg ChatMessage, width int) string {
 		// OpenCode uses colored square for agent, we'll use secondary color
 		square := lipgloss.NewStyle().
 			Foreground(secondaryColor).
+			Background(bgColor).
 			Render("▣")
 
 		mode := lipgloss.NewStyle().
 			Foreground(textColor).
+			Background(bgColor).
 			Render("Build") // Default mode
 
 		modelName := lipgloss.NewStyle().
 			Foreground(textMutedColor).
+			Background(bgColor).
 			Render(" · " + formatModelName(msg.Model))
 
 		duration := ""
 		if msg.DurationMs > 0 {
 			duration = lipgloss.NewStyle().
 				Foreground(textMutedColor).
+				Background(bgColor).
 				Render(fmt.Sprintf(" · %.1fs", float64(msg.DurationMs)/1000.0))
 		}
 
@@ -868,6 +960,7 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 		// OpenCode: paddingLeft 2, marginTop 1, border left with backgroundElement color
 		border := lipgloss.NewStyle().
 			Foreground(bgElementColor). // Subtle border for thinking
+			Background(bgColor).
 			Render(borderChar)
 
 		// Header: "_Thinking:_" prefix like OpenCode
@@ -877,6 +970,7 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 		}
 		headerStyled := lipgloss.NewStyle().
 			Foreground(textMutedColor).
+			Background(bgColor).
 			Italic(true).
 			Render(header)
 
@@ -904,6 +998,7 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 		toolHeader := fmt.Sprintf("%s %s", icon, block.Name)
 		headerStyled := lipgloss.NewStyle().
 			Foreground(textMutedColor).
+			Background(bgColor).
 			Render(toolHeader)
 
 		// Extract and display description from input
@@ -919,7 +1014,7 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 
 		// Inline format like OpenCode: icon name description
 		b.WriteString(fmt.Sprintf("      %s%s\n", headerStyled,
-			lipgloss.NewStyle().Foreground(textMutedColor).Render(descStyled)))
+			lipgloss.NewStyle().Foreground(textMutedColor).Background(bgColor).Render(descStyled)))
 
 	case agent.ContentTypeText:
 		// OpenCode TextPart: paddingLeft 3, marginTop 1
@@ -930,7 +1025,7 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 		for _, line := range lines {
 			// paddingLeft 3
 			b.WriteString(fmt.Sprintf("   %s\n",
-				lipgloss.NewStyle().Foreground(textColor).Render(line)))
+				lipgloss.NewStyle().Foreground(textColor).Background(bgColor).Render(line)))
 		}
 	}
 
@@ -1035,7 +1130,7 @@ func (m Model) renderHelp() string {
 		desc string
 	}{
 		{"tab", "navigate"},
-		{"1-2", "jump"},
+		{"1-3", "jump"},
 	}
 
 	// Add sidebar toggle if terminal is wide enough
