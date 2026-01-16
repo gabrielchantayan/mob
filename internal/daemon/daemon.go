@@ -119,9 +119,13 @@ func (d *Daemon) Start() error {
 	// Run initial patrol immediately
 	d.patrol()
 
-	// Main loop
-	ticker := time.NewTicker(2 * time.Minute)
-	defer ticker.Stop()
+	// Main loop with two tickers:
+	// - patrol every 2 minutes (health checks, spawning, cleanup)
+	// - nudge all agents every 5 minutes (keep them working)
+	patrolTicker := time.NewTicker(2 * time.Minute)
+	nudgeTicker := time.NewTicker(5 * time.Minute)
+	defer patrolTicker.Stop()
+	defer nudgeTicker.Stop()
 
 	for {
 		select {
@@ -130,8 +134,10 @@ func (d *Daemon) Start() error {
 		case sig := <-sigChan:
 			d.logger.Printf("\nReceived signal %v, shutting down...\n", sig)
 			return d.shutdown()
-		case <-ticker.C:
+		case <-patrolTicker.C:
 			d.patrol()
+		case <-nudgeTicker.C:
+			d.nudgeAllAgents()
 		}
 	}
 }
@@ -256,6 +262,37 @@ func (d *Daemon) patrol() {
 			d.registry.Unregister(record.ID)
 			delete(d.activeAgents, name)
 		}
+	}
+}
+
+// nudgeAllAgents sends a nudge to all active agents to keep them working.
+// This is called every 5 minutes to prevent agents from getting stuck.
+func (d *Daemon) nudgeAllAgents() {
+	d.mu.RLock()
+	agents := make(map[string]*agent.Agent)
+	for name, a := range d.activeAgents {
+		agents[name] = a
+	}
+	d.mu.RUnlock()
+
+	if len(agents) == 0 {
+		return
+	}
+
+	d.logger.Printf("Nudge: sending nudge to %d active agents\n", len(agents))
+
+	for name, a := range agents {
+		if !a.IsRunning() {
+			continue
+		}
+		// Send a message to the agent via Chat() - this uses --resume to continue the session
+		go func(name string, a *agent.Agent) {
+			d.logger.Printf("Nudge: nudging soldati '%s'\n", name)
+			_, err := a.Chat("Do your job.")
+			if err != nil {
+				d.logger.Printf("Nudge: failed to nudge soldati '%s': %v\n", name, err)
+			}
+		}(name, a)
 	}
 }
 

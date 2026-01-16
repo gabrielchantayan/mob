@@ -250,13 +250,13 @@ func (n *Nudger) History(agentID string) []NudgeEvent {
 	return result
 }
 
-// nudgeStdin sends a newline to the agent's stdin
+// nudgeStdin sends a message to the agent's stdin to wake it up
 func (n *Nudger) nudgeStdin(entry *agentEntry) error {
 	if entry.stdin == nil {
 		return fmt.Errorf("no stdin available for agent %s", entry.agent.ID)
 	}
 
-	_, err := entry.stdin.Write([]byte("\n"))
+	_, err := entry.stdin.Write([]byte("Do your job.\n"))
 	if err != nil {
 		return fmt.Errorf("failed to write to stdin: %w", err)
 	}
