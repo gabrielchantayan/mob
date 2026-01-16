@@ -1,12 +1,23 @@
 package agent
 
 import (
+	"bufio"
 	"crypto/rand"
 	"encoding/hex"
+	"io"
 	"os/exec"
 	"sync"
 	"time"
 )
+
+// AgentOutput represents a line of output from an agent
+type AgentOutput struct {
+	AgentID   string
+	AgentName string
+	Line      string
+	Timestamp time.Time
+	Stream    string // "stdout" or "stderr"
+}
 
 // CommandCreator is a function type that creates exec.Cmd instances
 // This allows for dependency injection in tests
@@ -23,24 +34,37 @@ type Spawner struct {
 	agents         map[string]*Agent
 	mu             sync.RWMutex
 	commandCreator CommandCreator      // for dependency injection in tests
+	outputChan     chan AgentOutput    // broadcast channel for agent output
+	outputSubs     []chan AgentOutput  // subscribers to agent output
+	outputSubsMu   sync.RWMutex        // protects outputSubs
 }
 
 // NewSpawner creates a new spawner
 func NewSpawner() *Spawner {
-	return &Spawner{
+	s := &Spawner{
 		claudePath:     "claude",
 		agents:         make(map[string]*Agent),
 		commandCreator: defaultCommandCreator,
+		outputChan:     make(chan AgentOutput, 1000),
+		outputSubs:     make([]chan AgentOutput, 0),
 	}
+	// Start output broadcaster
+	go s.broadcastOutput()
+	return s
 }
 
 // NewSpawnerWithPath creates a new spawner with a custom claude binary path
 func NewSpawnerWithPath(claudePath string) *Spawner {
-	return &Spawner{
+	s := &Spawner{
 		claudePath:     claudePath,
 		agents:         make(map[string]*Agent),
 		commandCreator: defaultCommandCreator,
+		outputChan:     make(chan AgentOutput, 1000),
+		outputSubs:     make([]chan AgentOutput, 0),
 	}
+	// Start output broadcaster
+	go s.broadcastOutput()
+	return s
 }
 
 // SetCommandCreator sets a custom command creator (useful for testing)
@@ -166,4 +190,70 @@ func (s *Spawner) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.agents)
+}
+
+// SubscribeOutput creates a new subscription channel for agent output
+func (s *Spawner) SubscribeOutput() <-chan AgentOutput {
+	s.outputSubsMu.Lock()
+	defer s.outputSubsMu.Unlock()
+
+	ch := make(chan AgentOutput, 100)
+	s.outputSubs = append(s.outputSubs, ch)
+	return ch
+}
+
+// UnsubscribeOutput removes a subscription channel
+func (s *Spawner) UnsubscribeOutput(ch <-chan AgentOutput) {
+	s.outputSubsMu.Lock()
+	defer s.outputSubsMu.Unlock()
+
+	for i, sub := range s.outputSubs {
+		if sub == ch {
+			close(sub)
+			s.outputSubs = append(s.outputSubs[:i], s.outputSubs[i+1:]...)
+			return
+		}
+	}
+}
+
+// broadcastOutput distributes output to all subscribers
+func (s *Spawner) broadcastOutput() {
+	for output := range s.outputChan {
+		s.outputSubsMu.RLock()
+		subs := make([]chan AgentOutput, len(s.outputSubs))
+		copy(subs, s.outputSubs)
+		s.outputSubsMu.RUnlock()
+
+		for _, sub := range subs {
+			select {
+			case sub <- output:
+			default:
+				// Skip if subscriber is slow
+			}
+		}
+	}
+}
+
+// emitOutput sends output to the broadcast channel
+func (s *Spawner) emitOutput(agentID, agentName, line, stream string) {
+	select {
+	case s.outputChan <- AgentOutput{
+		AgentID:   agentID,
+		AgentName: agentName,
+		Line:      line,
+		Timestamp: time.Now(),
+		Stream:    stream,
+	}:
+	default:
+		// Drop if channel is full
+	}
+}
+
+// teeOutput reads from a reader and writes to both a writer and the output channel
+func (s *Spawner) teeOutput(r io.Reader, agentID, agentName, stream string) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Text()
+		s.emitOutput(agentID, agentName, line, stream)
+	}
 }
