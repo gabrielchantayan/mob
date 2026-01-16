@@ -2,6 +2,7 @@ package underboss
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -107,4 +108,110 @@ func (u *Underboss) MobDir() string {
 // GetUnderbossDir returns the path to the underboss-specific directory
 func (u *Underboss) GetUnderbossDir() string {
 	return filepath.Join(u.mobDir, "underboss")
+}
+
+// Ask sends a question to the Underboss and returns the response.
+// It will start the Underboss if not already running.
+func (u *Underboss) Ask(ctx context.Context, question string) (string, error) {
+	// Start Underboss if not running
+	if !u.IsRunning() {
+		if err := u.Start(ctx); err != nil {
+			return "", err
+		}
+	}
+
+	u.mu.RLock()
+	agent := u.agent
+	u.mu.RUnlock()
+
+	if agent == nil {
+		return "", ErrUnderbossNotRunning
+	}
+
+	// Send the question using the ask method
+	params := map[string]interface{}{
+		"question": question,
+	}
+
+	resp, err := agent.Call("ask", params)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.Error != nil {
+		return "", errors.New(resp.Error.Message)
+	}
+
+	// Parse the response
+	if resp.Result != nil {
+		var result map[string]interface{}
+		if err := json.Unmarshal(resp.Result, &result); err != nil {
+			// Return raw result if we can't parse it
+			return string(resp.Result), nil
+		}
+
+		if response, ok := result["response"].(string); ok {
+			return response, nil
+		}
+
+		// Return the whole result as string if no response field
+		return string(resp.Result), nil
+	}
+
+	return "", nil
+}
+
+// Tell sends an instruction to the Underboss and returns the acknowledgment.
+// It will start the Underboss if not already running.
+func (u *Underboss) Tell(ctx context.Context, instruction string) (string, error) {
+	// Start Underboss if not running
+	if !u.IsRunning() {
+		if err := u.Start(ctx); err != nil {
+			return "", err
+		}
+	}
+
+	u.mu.RLock()
+	agent := u.agent
+	u.mu.RUnlock()
+
+	if agent == nil {
+		return "", ErrUnderbossNotRunning
+	}
+
+	// Send the instruction using the tell method
+	params := map[string]interface{}{
+		"instruction": instruction,
+	}
+
+	resp, err := agent.Call("tell", params)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.Error != nil {
+		return "", errors.New(resp.Error.Message)
+	}
+
+	// Parse the response
+	if resp.Result != nil {
+		var result map[string]interface{}
+		if err := json.Unmarshal(resp.Result, &result); err != nil {
+			// Return raw result if we can't parse it
+			return string(resp.Result), nil
+		}
+
+		if ack, ok := result["acknowledgment"].(string); ok {
+			return ack, nil
+		}
+
+		if response, ok := result["response"].(string); ok {
+			return response, nil
+		}
+
+		// Return the whole result as string if no expected field
+		return string(resp.Result), nil
+	}
+
+	return "", nil
 }
