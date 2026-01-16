@@ -3,6 +3,7 @@ module github.com/gabe/mob
 go 1.25.6
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/spf13/cobra v1.10.2
 )
