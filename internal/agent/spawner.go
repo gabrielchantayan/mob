@@ -68,6 +68,7 @@ type SpawnOptions struct {
 	WorkDir      string
 	SystemPrompt string // Injected on first call via --system-prompt
 	MCPConfig    string // Path to MCP config JSON file
+	Model        string // Model to use (e.g., "sonnet", "opus") - passed as --model flag
 }
 
 // Spawn creates a new Claude Code agent that can send messages
@@ -96,6 +97,7 @@ func (s *Spawner) SpawnWithOptions(opts SpawnOptions) (*Agent, error) {
 		WorkDir:      opts.WorkDir,
 		SystemPrompt: opts.SystemPrompt,
 		MCPConfig:    opts.MCPConfig,
+		Model:        opts.Model,
 		StartedAt:    time.Now(),
 		spawner:      s,
 	}

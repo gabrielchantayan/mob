@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -32,6 +33,7 @@ type Daemon struct {
 	pidFile      string
 	stateFile    string
 	mobDir       string
+	logger       *log.Logger
 	state        State
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -47,11 +49,12 @@ type Daemon struct {
 }
 
 // New creates a new daemon instance
-func New(mobDir string) *Daemon {
+func New(mobDir string, logger *log.Logger) *Daemon {
 	return &Daemon{
 		pidFile:      filepath.Join(mobDir, ".mob", "daemon.pid"),
 		stateFile:    filepath.Join(mobDir, ".mob", "daemon.state"),
 		mobDir:       mobDir,
+		logger:       logger,
 		state:        StateIdle,
 		activeAgents: make(map[string]*agent.Agent),
 		hookManagers: make(map[string]*hook.Manager),
@@ -111,7 +114,7 @@ func (d *Daemon) Start() error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	fmt.Println("Mob daemon started")
+	d.logger.Println("Mob daemon started")
 
 	// Run initial patrol immediately
 	d.patrol()
@@ -125,7 +128,7 @@ func (d *Daemon) Start() error {
 		case <-d.ctx.Done():
 			return d.shutdown()
 		case sig := <-sigChan:
-			fmt.Printf("\nReceived signal %v, shutting down...\n", sig)
+			d.logger.Printf("\nReceived signal %v, shutting down...\n", sig)
 			return d.shutdown()
 		case <-ticker.C:
 			d.patrol()
@@ -159,7 +162,7 @@ func (d *Daemon) shutdown() error {
 	d.mu.Lock()
 	// Cancel all hook watchers
 	for name, cancel := range d.hookCancels {
-		fmt.Printf("Stopping hook watcher for '%s'\n", name)
+		d.logger.Printf("Stopping hook watcher for '%s'\n", name)
 		cancel()
 	}
 	d.hookCancels = make(map[string]context.CancelFunc)
@@ -167,7 +170,7 @@ func (d *Daemon) shutdown() error {
 
 	// Kill all active agents
 	for name, a := range d.activeAgents {
-		fmt.Printf("Stopping soldati '%s'\n", name)
+		d.logger.Printf("Stopping soldati '%s'\n", name)
 		a.Kill()
 	}
 	d.activeAgents = make(map[string]*agent.Agent)
@@ -182,7 +185,7 @@ func (d *Daemon) shutdown() error {
 	}
 
 	RemovePID(d.pidFile)
-	fmt.Println("Mob daemon stopped")
+	d.logger.Println("Mob daemon stopped")
 	return nil
 }
 
@@ -198,7 +201,7 @@ func (d *Daemon) patrol() {
 	// Get all registered soldati from TOML files
 	registeredSoldati, err := d.soldatiMgr.List()
 	if err != nil {
-		fmt.Printf("Patrol: failed to list soldati: %v\n", err)
+		d.logger.Printf("Patrol: failed to list soldati: %v\n", err)
 		return
 	}
 
@@ -209,7 +212,7 @@ func (d *Daemon) patrol() {
 	// Get all active soldati from registry
 	activeAgents, err := d.registry.ListByType("soldati")
 	if err != nil {
-		fmt.Printf("Patrol: failed to list active agents: %v\n", err)
+		d.logger.Printf("Patrol: failed to list active agents: %v\n", err)
 		return
 	}
 
@@ -233,9 +236,9 @@ func (d *Daemon) patrol() {
 		}
 
 		// Spawn a new Claude instance for this soldati
-		fmt.Printf("Patrol: spawning Claude instance for soldati '%s'\n", s.Name)
+		d.logger.Printf("Patrol: spawning Claude instance for soldati '%s'\n", s.Name)
 		if err := d.spawnSoldatiAgent(s.Name); err != nil {
-			fmt.Printf("Patrol: failed to spawn agent for '%s': %v\n", s.Name, err)
+			d.logger.Printf("Patrol: failed to spawn agent for '%s': %v\n", s.Name, err)
 		}
 	}
 
@@ -249,7 +252,7 @@ func (d *Daemon) patrol() {
 			}
 		}
 		if !found {
-			fmt.Printf("Patrol: removing stale registry entry for '%s'\n", name)
+			d.logger.Printf("Patrol: removing stale registry entry for '%s'\n", name)
 			d.registry.Unregister(record.ID)
 			delete(d.activeAgents, name)
 		}
@@ -266,7 +269,7 @@ func (d *Daemon) patrolAssociates() {
 	// Get all associates from registry
 	associates, err := d.registry.ListByType("associate")
 	if err != nil {
-		fmt.Printf("Patrol: failed to list associates: %v\n", err)
+		d.logger.Printf("Patrol: failed to list associates: %v\n", err)
 		return
 	}
 
@@ -313,7 +316,7 @@ func (d *Daemon) patrolAssociates() {
 
 // nudgeAssociate sends a nudge signal to a timed-out associate and records the nudge time
 func (d *Daemon) nudgeAssociate(assoc *registry.AgentRecord) {
-	fmt.Printf("Patrol: associate '%s' exceeded timeout (running since %s), sending nudge\n",
+	d.logger.Printf("Patrol: associate '%s' exceeded timeout (running since %s), sending nudge\n",
 		assoc.ID, assoc.StartedAt.Format(time.RFC3339))
 
 	// Record nudge time
@@ -327,18 +330,18 @@ func (d *Daemon) nudgeAssociate(assoc *registry.AgentRecord) {
 	// The actual nudge - update the ping time which should trigger activity check
 	d.registry.Ping(assoc.ID)
 
-	fmt.Printf("Patrol: nudged associate '%s', will force kill in %v if no response\n",
+	d.logger.Printf("Patrol: nudged associate '%s', will force kill in %v if no response\n",
 		assoc.ID, config.DefaultAssociateGracePeriod)
 }
 
 // forceKillAssociate terminates an associate that has exceeded its timeout and grace period
 func (d *Daemon) forceKillAssociate(assoc *registry.AgentRecord, reason string) {
-	fmt.Printf("Patrol: force killing associate '%s' - %s\n", assoc.ID, reason)
+	d.logger.Printf("Patrol: force killing associate '%s' - %s\n", assoc.ID, reason)
 
 	// Kill in spawner (if it has a process)
 	if err := d.spawner.Kill(assoc.ID); err != nil {
 		// Ignore errors - process might already be dead
-		fmt.Printf("Patrol: warning - spawner.Kill failed for '%s': %v\n", assoc.ID, err)
+		d.logger.Printf("Patrol: warning - spawner.Kill failed for '%s': %v\n", assoc.ID, err)
 	}
 
 	// Update registry status to timed_out
@@ -349,7 +352,7 @@ func (d *Daemon) forceKillAssociate(assoc *registry.AgentRecord, reason string) 
 	delete(d.nudgedAt, assoc.ID)
 	d.mu.Unlock()
 
-	fmt.Printf("Patrol: associate '%s' terminated due to timeout\n", assoc.ID)
+	d.logger.Printf("Patrol: associate '%s' terminated due to timeout\n", assoc.ID)
 }
 
 // AssociateCleanupTTL is how long after completion before an associate is removed from registry
@@ -365,7 +368,7 @@ func (d *Daemon) cleanupStaleAssociates() {
 	// Get all associates from registry
 	associates, err := d.registry.ListByType("associate")
 	if err != nil {
-		fmt.Printf("Patrol: failed to list associates for cleanup: %v\n", err)
+		d.logger.Printf("Patrol: failed to list associates for cleanup: %v\n", err)
 		return
 	}
 
@@ -388,16 +391,15 @@ func (d *Daemon) cleanupStaleAssociates() {
 
 		timeSinceCompletion := now.Sub(completedTime)
 		if timeSinceCompletion > AssociateCleanupTTL {
-			fmt.Printf("Patrol: cleaning up stale associate '%s' (completed %v ago)\n",
+			d.logger.Printf("Patrol: cleaning up stale associate '%s' (completed %v ago)\n",
 				assoc.ID, timeSinceCompletion.Round(time.Second))
 
 			if err := d.registry.Unregister(assoc.ID); err != nil {
-				fmt.Printf("Patrol: failed to unregister stale associate '%s': %v\n", assoc.ID, err)
+				d.logger.Printf("Patrol: failed to unregister stale associate '%s': %v\n", assoc.ID, err)
 			}
 		}
 	}
 }
-
 
 // spawnSoldatiAgent creates a Claude instance for a soldati
 func (d *Daemon) spawnSoldatiAgent(name string) error {
@@ -414,6 +416,7 @@ func (d *Daemon) spawnSoldatiAgent(name string) error {
 		Turf:         "", // Will be assigned when work is given
 		WorkDir:      workDir,
 		SystemPrompt: agent.SoldatiSystemPrompt,
+		Model:        "sonnet", // Default to sonnet for cost efficiency
 	})
 	if err != nil {
 		return fmt.Errorf("failed to spawn agent: %w", err)
@@ -440,10 +443,10 @@ func (d *Daemon) spawnSoldatiAgent(name string) error {
 
 	// Set up hook watching for this soldati
 	if err := d.startHookWatcher(name, a); err != nil {
-		fmt.Printf("Patrol: warning - failed to start hook watcher for '%s': %v\n", name, err)
+		d.logger.Printf("Patrol: warning - failed to start hook watcher for '%s': %v\n", name, err)
 	}
 
-	fmt.Printf("Patrol: soldati '%s' is now active (ID: %s)\n", name, a.ID)
+	d.logger.Printf("Patrol: soldati '%s' is now active (ID: %s)\n", name, a.ID)
 	return nil
 }
 
@@ -475,7 +478,7 @@ func (d *Daemon) startHookWatcher(name string, a *agent.Agent) error {
 	// Start goroutine to process hooks
 	go d.processHooks(name, a, hookChan, mgr)
 
-	fmt.Printf("Patrol: hook watcher started for soldati '%s'\n", name)
+	d.logger.Printf("Patrol: hook watcher started for soldati '%s'\n", name)
 	return nil
 }
 
@@ -486,19 +489,19 @@ func (d *Daemon) processHooks(name string, a *agent.Agent, hookChan <-chan *hook
 		case hook.HookTypeAssign:
 			d.handleAssignment(name, a, h, mgr)
 		case hook.HookTypeNudge:
-			fmt.Printf("Hook: nudge received for soldati '%s'\n", name)
+			d.logger.Printf("Hook: nudge received for soldati '%s'\n", name)
 			// Nudge just wakes up the agent - no action needed with per-call model
 		case hook.HookTypeAbort:
-			fmt.Printf("Hook: abort received for soldati '%s'\n", name)
+			d.logger.Printf("Hook: abort received for soldati '%s'\n", name)
 			// With per-call model, we can't abort mid-execution
 			// Just clear the hook and mark idle
 			mgr.Clear()
 			d.registry.UpdateStatus(a.ID, "idle")
 		case hook.HookTypePause:
-			fmt.Printf("Hook: pause received for soldati '%s'\n", name)
+			d.logger.Printf("Hook: pause received for soldati '%s'\n", name)
 			d.registry.UpdateStatus(a.ID, "paused")
 		case hook.HookTypeResume:
-			fmt.Printf("Hook: resume received for soldati '%s'\n", name)
+			d.logger.Printf("Hook: resume received for soldati '%s'\n", name)
 			d.registry.UpdateStatus(a.ID, "idle")
 		}
 	}
@@ -506,7 +509,7 @@ func (d *Daemon) processHooks(name string, a *agent.Agent, hookChan <-chan *hook
 
 // handleAssignment processes a work assignment for a soldati
 func (d *Daemon) handleAssignment(name string, a *agent.Agent, h *hook.Hook, mgr *hook.Manager) {
-	fmt.Printf("Hook: work assignment for soldati '%s': bead=%s\n", name, h.BeadID)
+	d.logger.Printf("Hook: work assignment for soldati '%s': bead=%s\n", name, h.BeadID)
 
 	// Update status to working
 	d.registry.UpdateStatus(a.ID, "active")
@@ -520,19 +523,19 @@ func (d *Daemon) handleAssignment(name string, a *agent.Agent, h *hook.Hook, mgr
 			taskMsg = fmt.Sprintf("[Bead %s] %s", h.BeadID, h.Message)
 		}
 
-		fmt.Printf("Soldati '%s' starting work: %s\n", name, truncateMessage(taskMsg, 80))
+		d.logger.Printf("Soldati '%s' starting work: %s\n", name, truncateMessage(taskMsg, 80))
 
 		// Call the agent
 		resp, err := a.Chat(taskMsg)
 		if err != nil {
-			fmt.Printf("Soldati '%s' error: %v\n", name, err)
+			d.logger.Printf("Soldati '%s' error: %v\n", name, err)
 			d.registry.UpdateStatus(a.ID, "error")
 			return
 		}
 
 		// Log completion
 		responseText := resp.GetText()
-		fmt.Printf("Soldati '%s' completed work. Response: %s\n", name, truncateMessage(responseText, 200))
+		d.logger.Printf("Soldati '%s' completed work. Response: %s\n", name, truncateMessage(responseText, 200))
 
 		// Clear the hook and mark idle
 		mgr.Clear()
@@ -559,20 +562,20 @@ func (d *Daemon) checkAgentHealth(name string, record *registry.AgentRecord) {
 	if !ok {
 		// Agent in registry but not in memory - this can happen after daemon restart
 		// Try to respawn the agent directly instead of removing it
-		fmt.Printf("Patrol: soldati '%s' in registry but not in memory, respawning...\n", name)
+		d.logger.Printf("Patrol: soldati '%s' in registry but not in memory, respawning...\n", name)
 
 		// Check if soldati TOML exists before respawning
 		soldatiPath := filepath.Join(d.mobDir, "soldati", name+".toml")
 		if _, err := os.Stat(soldatiPath); os.IsNotExist(err) {
 			// No TOML file - this soldati was never properly set up, remove it
-			fmt.Printf("Patrol: soldati '%s' has no TOML file, removing from registry\n", name)
+			d.logger.Printf("Patrol: soldati '%s' has no TOML file, removing from registry\n", name)
 			d.registry.Unregister(record.ID)
 			return
 		}
 
 		// Respawn the agent and update the registry with the new process
 		if err := d.respawnSoldati(name, record); err != nil {
-			fmt.Printf("Patrol: failed to respawn soldati '%s': %v\n", name, err)
+			d.logger.Printf("Patrol: failed to respawn soldati '%s': %v\n", name, err)
 			// Don't unregister on failure - leave it for next patrol cycle
 		}
 		return
@@ -580,7 +583,7 @@ func (d *Daemon) checkAgentHealth(name string, record *registry.AgentRecord) {
 
 	// Check if agent process is still running
 	if !a.IsRunning() {
-		fmt.Printf("Patrol: soldati '%s' process not running, removing from registry\n", name)
+		d.logger.Printf("Patrol: soldati '%s' process not running, removing from registry\n", name)
 		d.registry.Unregister(record.ID)
 		d.stopHookWatcher(name)
 		d.mu.Lock()
@@ -624,6 +627,7 @@ func (d *Daemon) respawnSoldati(name string, record *registry.AgentRecord) error
 		Turf:         record.Turf,
 		WorkDir:      workDir,
 		SystemPrompt: agent.SoldatiSystemPrompt,
+		Model:        "sonnet", // Default to sonnet for cost efficiency
 	})
 	if err != nil {
 		return fmt.Errorf("failed to spawn agent: %w", err)
@@ -644,10 +648,10 @@ func (d *Daemon) respawnSoldati(name string, record *registry.AgentRecord) error
 
 	// Set up hook watching
 	if err := d.startHookWatcher(name, a); err != nil {
-		fmt.Printf("Patrol: warning - failed to start hook watcher for '%s': %v\n", name, err)
+		d.logger.Printf("Patrol: warning - failed to start hook watcher for '%s': %v\n", name, err)
 	}
 
-	fmt.Printf("Patrol: respawned soldati '%s' (ID: %s)\n", name, record.ID)
+	d.logger.Printf("Patrol: respawned soldati '%s' (ID: %s)\n", name, record.ID)
 	return nil
 }
 

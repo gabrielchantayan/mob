@@ -289,6 +289,7 @@ func (u *Underboss) SpawnSoldati(name, turf, workDir string) (*agent.Agent, erro
 		Turf:         turf,
 		WorkDir:      workDir,
 		SystemPrompt: agent.SoldatiSystemPrompt,
+		Model:        "sonnet", // Default to sonnet for cost efficiency
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to spawn soldati: %w", err)
@@ -329,6 +330,7 @@ func (u *Underboss) SpawnAssociate(turf, task, workDir string) (*agent.Agent, er
 		Turf:         turf,
 		WorkDir:      workDir,
 		SystemPrompt: agent.AssociateSystemPrompt,
+		Model:        "sonnet", // Default to sonnet for cost efficiency
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to spawn associate: %w", err)

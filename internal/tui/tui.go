@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -277,7 +279,7 @@ func (m *Model) loadData() {
 	mobDir := filepath.Join(home, "mob")
 
 	// Check daemon status
-	d := daemon.New(mobDir)
+	d := daemon.New(mobDir, log.New(io.Discard, "", 0))
 	state, pid, err := d.Status()
 	if err == nil {
 		m.daemonStatus = string(state)

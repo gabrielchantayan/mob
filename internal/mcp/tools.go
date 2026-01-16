@@ -410,6 +410,7 @@ func handleSpawnSoldati(ctx *ToolContext, args map[string]interface{}) (string, 
 		Turf:         turf,
 		WorkDir:      workDir,
 		SystemPrompt: agent.SoldatiSystemPrompt,
+		Model:        "sonnet", // Default to sonnet for cost efficiency
 	})
 	if err != nil {
 		// Clean up TOML file on failure
@@ -472,6 +473,7 @@ func handleSpawnAssociate(ctx *ToolContext, args map[string]interface{}) (string
 		Turf:         turf,
 		WorkDir:      workDir,
 		SystemPrompt: agent.AssociateSystemPrompt,
+		Model:        "sonnet", // Default to sonnet for cost efficiency
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to spawn associate: %w", err)

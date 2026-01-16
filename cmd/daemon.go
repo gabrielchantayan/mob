@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -9,6 +11,8 @@ import (
 	"github.com/gabe/mob/internal/daemon"
 	"github.com/spf13/cobra"
 )
+
+var debug bool
 
 var daemonCmd = &cobra.Command{
 	Use:   "daemon",
@@ -25,7 +29,14 @@ var daemonStartCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		d := daemon.New(mobDir)
+
+		var out io.Writer = io.Discard
+		if debug {
+			out = os.Stdout
+		}
+		logger := log.New(out, "", log.LstdFlags)
+
+		d := daemon.New(mobDir, logger)
 
 		if err := d.Start(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -47,7 +58,9 @@ var daemonStopCmd = &cobra.Command{
 
 		pid, err := daemon.ReadPID(pidFile)
 		if os.IsNotExist(err) {
-			fmt.Println("Daemon not running")
+			if debug {
+				fmt.Println("Daemon not running")
+			}
 			return
 		}
 		if err != nil {
@@ -66,7 +79,9 @@ var daemonStopCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		fmt.Println("Daemon stop signal sent")
+		if debug {
+			fmt.Println("Daemon stop signal sent")
+		}
 	},
 }
 
@@ -79,7 +94,14 @@ var daemonStatusCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		d := daemon.New(mobDir)
+
+		var out io.Writer = io.Discard
+		if debug {
+			out = os.Stdout
+		}
+		logger := log.New(out, "", log.LstdFlags)
+
+		d := daemon.New(mobDir, logger)
 
 		state, pid, err := d.Status()
 		if err != nil {
@@ -104,6 +126,7 @@ func getMobDir() (string, error) {
 }
 
 func init() {
+	daemonCmd.PersistentFlags().BoolVar(&debug, "debug", false, "enable debug output")
 	daemonCmd.AddCommand(daemonStartCmd)
 	daemonCmd.AddCommand(daemonStopCmd)
 	daemonCmd.AddCommand(daemonStatusCmd)

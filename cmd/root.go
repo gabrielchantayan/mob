@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -24,7 +26,7 @@ var rootCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		d := daemon.New(mobDir)
+		d := daemon.New(mobDir, log.New(io.Discard, "", 0))
 
 		// Check if daemon is already running
 		state, _, err := d.Status()

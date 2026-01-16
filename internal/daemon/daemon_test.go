@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"testing"
@@ -111,7 +113,7 @@ func TestCheckExistingDaemon(t *testing.T) {
 }
 
 func TestDaemonNew(t *testing.T) {
-	d := New("/test/mob")
+	d := New("/test/mob", log.New(io.Discard, "", 0))
 
 	if d.pidFile != "/test/mob/.mob/daemon.pid" {
 		t.Errorf("unexpected pidFile: %s", d.pidFile)
@@ -137,7 +139,7 @@ func TestDaemonStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	d := New(tmpDir)
+	d := New(tmpDir, log.New(io.Discard, "", 0))
 
 	// No daemon running
 	state, pid, err := d.Status()

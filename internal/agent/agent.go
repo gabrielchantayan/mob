@@ -32,6 +32,7 @@ type Agent struct {
 	SessionID    string    // Claude session ID for --resume
 	SystemPrompt string    // System prompt injected on first call
 	MCPConfig    string    // Path to MCP config JSON file
+	Model        string    // Model to use (e.g., "sonnet", "opus") - passed as --model flag
 	spawner      *Spawner
 	mu           sync.Mutex
 }
@@ -166,6 +167,11 @@ func (a *Agent) ChatStream(message string, callback StreamCallback) (*ChatRespon
 	// Add MCP config if configured
 	if a.MCPConfig != "" {
 		args = append(args, "--mcp-config", a.MCPConfig)
+	}
+
+	// Add model flag if specified
+	if a.Model != "" {
+		args = append(args, "--model", a.Model)
 	}
 
 	// Add --resume if we have a session ID
