@@ -60,7 +60,7 @@ func getBeadsPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
-	return filepath.Join(home, "mob", "beads"), nil
+	return filepath.Join(home, "mob", ".mob", "beads"), nil
 }
 
 func init() {
