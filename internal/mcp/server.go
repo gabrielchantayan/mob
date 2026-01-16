@@ -10,24 +10,27 @@ import (
 
 	"github.com/gabe/mob/internal/agent"
 	"github.com/gabe/mob/internal/registry"
+	"github.com/gabe/mob/internal/storage"
 )
 
 // Server implements an MCP server over stdio
 type Server struct {
-	registry *registry.Registry
-	spawner  *agent.Spawner
-	mobDir   string
-	tools    map[string]*Tool
-	taskWg   sync.WaitGroup // Track background tasks
+	registry  *registry.Registry
+	spawner   *agent.Spawner
+	beadStore *storage.BeadStore
+	mobDir    string
+	tools     map[string]*Tool
+	taskWg    sync.WaitGroup // Track background tasks
 }
 
 // NewServer creates a new MCP server
-func NewServer(reg *registry.Registry, spawner *agent.Spawner, mobDir string) *Server {
+func NewServer(reg *registry.Registry, spawner *agent.Spawner, beadStore *storage.BeadStore, mobDir string) *Server {
 	s := &Server{
-		registry: reg,
-		spawner:  spawner,
-		mobDir:   mobDir,
-		tools:    make(map[string]*Tool),
+		registry:  reg,
+		spawner:   spawner,
+		beadStore: beadStore,
+		mobDir:    mobDir,
+		tools:     make(map[string]*Tool),
 	}
 
 	// Register all tools
@@ -229,10 +232,11 @@ func (s *Server) handleToolsCall(req *jsonRPCRequest) *jsonRPCResponse {
 
 	// Execute the tool
 	ctx := &ToolContext{
-		Registry: s.registry,
-		Spawner:  s.spawner,
-		MobDir:   s.mobDir,
-		TaskWg:   &s.taskWg,
+		Registry:  s.registry,
+		Spawner:   s.spawner,
+		BeadStore: s.beadStore,
+		MobDir:    s.mobDir,
+		TaskWg:    &s.taskWg,
 	}
 
 	result, err := tool.Handler(ctx, params.Arguments)

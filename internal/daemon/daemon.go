@@ -264,6 +264,7 @@ func (d *Daemon) spawnSoldatiAgent(name string) error {
 		ID:        a.ID,
 		Type:      "soldati",
 		Name:      name,
+		Turf:      d.mobDir, // Default turf to mob directory, updated when work is assigned
 		Status:    "idle",
 		StartedAt: a.StartedAt,
 		LastPing:  time.Now(),
@@ -397,9 +398,23 @@ func (d *Daemon) checkAgentHealth(name string, record *registry.AgentRecord) {
 
 	if !ok {
 		// Agent in registry but not in memory - this can happen after daemon restart
-		// Mark as needing respawn by removing from registry
-		fmt.Printf("Patrol: soldati '%s' in registry but not in memory, will respawn\n", name)
-		d.registry.Unregister(record.ID)
+		// Try to respawn the agent directly instead of removing it
+		fmt.Printf("Patrol: soldati '%s' in registry but not in memory, respawning...\n", name)
+
+		// Check if soldati TOML exists before respawning
+		soldatiPath := filepath.Join(d.mobDir, "soldati", name+".toml")
+		if _, err := os.Stat(soldatiPath); os.IsNotExist(err) {
+			// No TOML file - this soldati was never properly set up, remove it
+			fmt.Printf("Patrol: soldati '%s' has no TOML file, removing from registry\n", name)
+			d.registry.Unregister(record.ID)
+			return
+		}
+
+		// Respawn the agent and update the registry with the new process
+		if err := d.respawnSoldati(name, record); err != nil {
+			fmt.Printf("Patrol: failed to respawn soldati '%s': %v\n", name, err)
+			// Don't unregister on failure - leave it for next patrol cycle
+		}
 		return
 	}
 
@@ -417,6 +432,47 @@ func (d *Daemon) checkAgentHealth(name string, record *registry.AgentRecord) {
 
 	// Update last ping
 	d.registry.Ping(record.ID)
+}
+
+// respawnSoldati recreates an agent process for an existing registry entry
+func (d *Daemon) respawnSoldati(name string, record *registry.AgentRecord) error {
+	workDir := d.mobDir
+	if record.Turf != "" {
+		workDir = record.Turf
+	}
+
+	// Spawn a new agent process
+	a, err := d.spawner.SpawnWithOptions(agent.SpawnOptions{
+		Type:         agent.AgentTypeSoldati,
+		Name:         name,
+		Turf:         record.Turf,
+		WorkDir:      workDir,
+		SystemPrompt: agent.SoldatiSystemPrompt,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to spawn agent: %w", err)
+	}
+
+	// Update registry with new process info (keep existing ID for continuity)
+	record.StartedAt = a.StartedAt
+	record.LastPing = time.Now()
+	record.Status = "idle"
+	if err := d.registry.Register(record); err != nil {
+		return fmt.Errorf("failed to update registry: %w", err)
+	}
+
+	// Keep reference in memory
+	d.mu.Lock()
+	d.activeAgents[name] = a
+	d.mu.Unlock()
+
+	// Set up hook watching
+	if err := d.startHookWatcher(name, a); err != nil {
+		fmt.Printf("Patrol: warning - failed to start hook watcher for '%s': %v\n", name, err)
+	}
+
+	fmt.Printf("Patrol: respawned soldati '%s' (ID: %s)\n", name, record.ID)
+	return nil
 }
 
 // stopHookWatcher stops the hook watcher for a soldati

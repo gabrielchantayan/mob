@@ -70,8 +70,8 @@ var toolIcons = map[string]string{
 
 // ChatMessage represents a message in the chat history
 type ChatMessage struct {
-	Role       string // "user" or "assistant"
-	Content    string // For user messages
+	Role       string                   // "user" or "assistant"
+	Content    string                   // For user messages
 	Blocks     []agent.ChatContentBlock // For assistant messages
 	Model      string
 	DurationMs int64
@@ -130,14 +130,14 @@ type Model struct {
 	activeSoldati []SoldatiStatus
 
 	// Chat state
-	chatInput       textarea.Model
-	chatViewport    viewport.Model
-	chatMessages    []ChatMessage
-	chatWaiting     bool
-	chatError       string
-	currentBlocks   []agent.ChatContentBlock // Blocks being streamed
-	underboss       *underboss.Underboss
-	mobDir          string
+	chatInput     textarea.Model
+	chatViewport  viewport.Model
+	chatMessages  []ChatMessage
+	chatWaiting   bool
+	chatError     string
+	currentBlocks []agent.ChatContentBlock // Blocks being streamed
+	underboss     *underboss.Underboss
+	mobDir        string
 
 	// Agent records from registry
 	agentRecords []*registry.AgentRecord
@@ -156,6 +156,14 @@ func New() Model {
 	ti.SetHeight(3)
 	ti.ShowLineNumbers = false
 	ti.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+enter")
+
+	// Set textarea styles to match the panel background
+	ti.FocusedStyle.Base = panelBaseStyle
+	ti.BlurredStyle.Base = panelBaseStyle
+	ti.FocusedStyle.CursorLine = panelBaseStyle
+	ti.BlurredStyle.CursorLine = panelBaseStyle
+	ti.Cursor.Style = panelBaseStyle.Foreground(textColor)
+	ti.Prompt = " " // No prompt, we use the sidebar
 
 	// Initialize viewport for chat history
 	vp := viewport.New(80, 10)
@@ -736,7 +744,7 @@ func (m Model) renderSidebar() string {
 	// Sidebar container with left border
 	return lipgloss.NewStyle().
 		Width(m.sidebarWidth).
-		Height(m.height - 6).
+		Height(m.height-6).
 		Padding(1, 2).
 		Background(bgPanelColor).
 		BorderStyle(lipgloss.NormalBorder()).
@@ -928,30 +936,51 @@ func (m Model) renderChat() string {
 	b.WriteString(m.chatViewport.View())
 	b.WriteString("\n")
 
-	// Status/error line
-	if m.chatWaiting {
-		b.WriteString(mutedStyle.Render("  Thinking..."))
-		b.WriteString("\n")
-	} else if m.chatError != "" {
-		b.WriteString(errorStyle.Render("  Error: " + m.chatError))
-		b.WriteString("\n")
-	}
-
 	// Calculate input width based on main area
 	inputWidth := m.width - m.sidebarWidth - 16
 	if inputWidth < 30 {
 		inputWidth = 30
 	}
+	// Update textarea width
+	m.chatInput.SetWidth(inputWidth)
 
-	// Input area - minimal style with accent bar
-	inputAccent := accentBarStyle.Render("▌")
-	inputBox := lipgloss.NewStyle().
+	// Shared style for footer elements to match input box background
+	footerStyle := lipgloss.NewStyle().
 		Background(bgPanelColor).
 		Padding(0, 1).
-		Width(inputWidth).
-		Render(m.chatInput.View())
+		Width(inputWidth)
 
-	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, inputAccent, inputBox))
+	// Build footer content (Status + Input)
+	var footerBuilder strings.Builder
+
+	// Status/error line
+	if m.chatWaiting {
+		footerBuilder.WriteString(footerStyle.Foreground(textMutedColor).Render("Thinking..."))
+		footerBuilder.WriteString("\n")
+	} else if m.chatError != "" {
+		footerBuilder.WriteString(footerStyle.Foreground(errorColor).Render("Error: " + m.chatError))
+		footerBuilder.WriteString("\n")
+	}
+
+	// Input area
+	// We want the input area to also have the panel background and full width
+	inputView := m.chatInput.View()
+	// Force background color on lines from textarea view
+	inputLines := strings.Split(inputView, "\n")
+	for i, line := range inputLines {
+		if i > 0 {
+			footerBuilder.WriteString("\n")
+		}
+		// Render each line with the footer style to ensure full width background
+		footerBuilder.WriteString(footerStyle.Render(line))
+	}
+
+	// Add accent bar to the whole footer
+	footerContent := footerBuilder.String()
+	footerHeight := lipgloss.Height(footerContent)
+	accent := accentBarStyle.Render(strings.Repeat("▌\n", footerHeight-1) + "▌")
+
+	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, accent, footerContent))
 
 	return b.String()
 }
@@ -1102,14 +1131,14 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 
 		// marginTop 1
 		b.WriteString(lineStyle.Render("") + "\n")
-		b.WriteString(lineStyle.Render(border + "  " + headerStyled) + "\n")
+		b.WriteString(lineStyle.Render(border+"  "+headerStyled) + "\n")
 
 		// Thinking content (muted, wrapped) - paddingLeft 2 from border
 		if block.Text != "" {
 			lines := strings.Split(wrapText(block.Text, width-6), "\n")
 			for _, line := range lines {
 				styledLine := lipgloss.NewStyle().Foreground(textMutedColor).Render(line)
-				b.WriteString(lineStyle.Render(border + "  " + styledLine) + "\n")
+				b.WriteString(lineStyle.Render(border+"  "+styledLine) + "\n")
 			}
 		}
 
@@ -1143,7 +1172,7 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 			Background(bgColor).
 			PaddingLeft(6).
 			Width(width)
-		b.WriteString(toolLineStyle.Render(headerStyled + descStyled) + "\n")
+		b.WriteString(toolLineStyle.Render(headerStyled+descStyled) + "\n")
 
 	case agent.ContentTypeText:
 		// OpenCode TextPart: paddingLeft 3, marginTop 1

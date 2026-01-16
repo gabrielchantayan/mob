@@ -11,16 +11,20 @@ import (
 	"time"
 
 	"github.com/gabe/mob/internal/agent"
+	"github.com/gabe/mob/internal/hook"
+	"github.com/gabe/mob/internal/models"
 	"github.com/gabe/mob/internal/registry"
 	"github.com/gabe/mob/internal/soldati"
+	"github.com/gabe/mob/internal/storage"
 )
 
 // ToolContext provides access to mob systems for tool handlers
 type ToolContext struct {
-	Registry *registry.Registry
-	Spawner  *agent.Spawner
-	MobDir   string
-	TaskWg   *sync.WaitGroup // Track background tasks for graceful shutdown
+	Registry  *registry.Registry
+	Spawner   *agent.Spawner
+	BeadStore *storage.BeadStore
+	MobDir    string
+	TaskWg    *sync.WaitGroup // Track background tasks for graceful shutdown
 }
 
 // ToolHandler is a function that executes a tool
@@ -177,6 +181,170 @@ func GetTools() []*Tool {
 				},
 			},
 			Handler: handleAssignBead,
+		},
+		{
+			Name:        "create_bead",
+			Description: "Drop a new job on the board. Creates a bead (work item) for the crew to handle.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"title": map[string]interface{}{
+						"type":        "string",
+						"description": "What's the job called",
+					},
+					"description": map[string]interface{}{
+						"type":        "string",
+						"description": "The full rundown on what needs doing",
+					},
+					"type": map[string]interface{}{
+						"type":        "string",
+						"description": "Kind of work: bug, feature, task, epic, chore, review, or heresy",
+						"enum":        []string{"bug", "feature", "task", "epic", "chore", "review", "heresy"},
+					},
+					"priority": map[string]interface{}{
+						"type":        "integer",
+						"description": "How hot is it? 0=highest priority, 4=lowest",
+						"minimum":     0,
+						"maximum":     4,
+					},
+					"turf": map[string]interface{}{
+						"type":        "string",
+						"description": "Which project/territory this belongs to",
+					},
+					"labels": map[string]interface{}{
+						"type":        "string",
+						"description": "Comma-separated tags for the job",
+					},
+					"parent_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Parent bead ID if this is a sub-task",
+					},
+					"blocks": map[string]interface{}{
+						"type":        "array",
+						"description": "Bead IDs that this work blocks",
+						"items":       map[string]interface{}{"type": "string"},
+					},
+					"related": map[string]interface{}{
+						"type":        "array",
+						"description": "Related bead IDs",
+						"items":       map[string]interface{}{"type": "string"},
+					},
+				},
+				"required": []string{"title"},
+			},
+			Handler: handleCreateBead,
+		},
+		{
+			Name:        "list_beads",
+			Description: "Check the job board. See what work is pending for the crew.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"status": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by status: open, in_progress, blocked, closed, pending_approval",
+						"enum":        []string{"open", "in_progress", "blocked", "closed", "pending_approval"},
+					},
+					"turf": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by project/territory",
+					},
+					"assignee": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by who's working it",
+					},
+					"type": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by work type: bug, feature, task, epic, chore, review, heresy",
+						"enum":        []string{"bug", "feature", "task", "epic", "chore", "review", "heresy"},
+					},
+				},
+			},
+			Handler: handleListBeads,
+		},
+		{
+			Name:        "get_bead",
+			Description: "Check on a piece of work. Returns full details about a bead.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"id": map[string]interface{}{
+						"type":        "string",
+						"description": "Bead ID to look up",
+					},
+				},
+				"required": []string{"id"},
+			},
+			Handler: handleGetBead,
+		},
+		{
+			Name:        "update_bead",
+			Description: "Make changes to a piece of work. Update any details on a bead.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"id": map[string]interface{}{
+						"type":        "string",
+						"description": "Bead ID to update",
+					},
+					"title": map[string]interface{}{
+						"type":        "string",
+						"description": "New title for the bead",
+					},
+					"description": map[string]interface{}{
+						"type":        "string",
+						"description": "New description for the bead",
+					},
+					"status": map[string]interface{}{
+						"type":        "string",
+						"description": "New status: open, in_progress, blocked, closed, pending_approval",
+						"enum":        []string{"open", "in_progress", "blocked", "closed", "pending_approval"},
+					},
+					"priority": map[string]interface{}{
+						"type":        "integer",
+						"description": "Priority level 0-4 (0 = highest)",
+					},
+					"assignee": map[string]interface{}{
+						"type":        "string",
+						"description": "Who's working this job",
+					},
+					"labels": map[string]interface{}{
+						"type":        "string",
+						"description": "Labels/tags for the bead",
+					},
+					"blocks": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Bead IDs this work blocks",
+					},
+					"related": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Related bead IDs",
+					},
+				},
+				"required": []string{"id"},
+			},
+			Handler: handleUpdateBead,
+		},
+		{
+			Name:        "complete_bead",
+			Description: "Mark the job as done. Closes out a bead.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"id": map[string]interface{}{
+						"type":        "string",
+						"description": "Bead ID to complete",
+					},
+					"close_reason": map[string]interface{}{
+						"type":        "string",
+						"description": "Why the job's done (completed, won't fix, duplicate, etc.)",
+					},
+				},
+				"required": []string{"id"},
+			},
+			Handler: handleCompleteBead,
 		},
 	}
 }
@@ -484,13 +652,13 @@ func handleAssignBead(ctx *ToolContext, args map[string]interface{}) (string, er
 	}
 
 	// Find the agent
-	var agent *registry.AgentRecord
+	var agentRecord *registry.AgentRecord
 	var err error
 
 	if agentID != "" {
-		agent, err = ctx.Registry.Get(agentID)
+		agentRecord, err = ctx.Registry.Get(agentID)
 	} else {
-		agent, err = ctx.Registry.GetByName(agentName)
+		agentRecord, err = ctx.Registry.GetByName(agentName)
 	}
 
 	if err != nil {
@@ -501,18 +669,329 @@ func handleAssignBead(ctx *ToolContext, args map[string]interface{}) (string, er
 	taskDesc := description
 	if beadID != "" {
 		taskDesc = fmt.Sprintf("bead:%s", beadID)
+
+		// If bead_id is provided, update the bead's assignee and status
+		if ctx.BeadStore != nil {
+			bead, err := ctx.BeadStore.Get(beadID)
+			if err != nil {
+				return "", fmt.Errorf("bead not found: %w", err)
+			}
+
+			// Update assignee to the agent's name (or ID if no name)
+			assigneeName := agentRecord.Name
+			if assigneeName == "" {
+				assigneeName = agentRecord.ID
+			}
+			bead.Assignee = assigneeName
+			bead.Status = models.BeadStatusInProgress
+
+			if _, err := ctx.BeadStore.Update(bead); err != nil {
+				return "", fmt.Errorf("failed to update bead: %w", err)
+			}
+		}
 	}
 
-	// Update agent's task
-	if err := ctx.Registry.UpdateTask(agent.ID, taskDesc); err != nil {
+	// Update agent's task in registry
+	if err := ctx.Registry.UpdateTask(agentRecord.ID, taskDesc); err != nil {
 		return "", fmt.Errorf("failed to assign task: %w", err)
 	}
 
-	displayName := agent.Name
+	// Update status to active
+	if err := ctx.Registry.UpdateStatus(agentRecord.ID, "active"); err != nil {
+		return "", fmt.Errorf("failed to update status: %w", err)
+	}
+
+	// Write hook file so daemon processes the work
+	hookDir := filepath.Join(ctx.MobDir, ".mob", "soldati")
+	hookMgr, err := hook.NewManager(hookDir, agentRecord.Name)
+	if err != nil {
+		return "", fmt.Errorf("failed to create hook manager: %w", err)
+	}
+
+	h := &hook.Hook{
+		Type:      hook.HookTypeAssign,
+		BeadID:    beadID,
+		Message:   description,
+		Timestamp: time.Now(),
+	}
+	if err := hookMgr.Write(h); err != nil {
+		return "", fmt.Errorf("failed to write hook: %w", err)
+	}
+
+	displayName := agentRecord.Name
 	if displayName == "" {
-		displayName = agent.ID
+		displayName = agentRecord.ID
 	}
 	return fmt.Sprintf("Assigned work to '%s': %s", displayName, truncate(taskDesc, 50)), nil
+}
+
+func handleCreateBead(ctx *ToolContext, args map[string]interface{}) (string, error) {
+	title, _ := args["title"].(string)
+	if title == "" {
+		return "", fmt.Errorf("title is required")
+	}
+
+	if ctx.BeadStore == nil {
+		return "", fmt.Errorf("bead store not available")
+	}
+
+	// Build the bead from args
+	bead := &models.Bead{
+		Title:  title,
+		Status: models.BeadStatusOpen,
+	}
+
+	// Optional fields
+	if description, ok := args["description"].(string); ok {
+		bead.Description = description
+	}
+	if beadType, ok := args["type"].(string); ok && beadType != "" {
+		bead.Type = models.BeadType(beadType)
+	} else {
+		bead.Type = models.BeadTypeTask // Default to task
+	}
+	if priority, ok := args["priority"].(float64); ok {
+		bead.Priority = int(priority)
+	} else {
+		bead.Priority = 2 // Default to medium priority
+	}
+	if turf, ok := args["turf"].(string); ok {
+		bead.Turf = turf
+	}
+	if labels, ok := args["labels"].(string); ok {
+		bead.Labels = labels
+	}
+	if parentID, ok := args["parent_id"].(string); ok {
+		bead.ParentID = parentID
+	}
+	if blocks, ok := args["blocks"].([]interface{}); ok {
+		bead.Blocks = make([]string, 0, len(blocks))
+		for _, b := range blocks {
+			if s, ok := b.(string); ok {
+				bead.Blocks = append(bead.Blocks, s)
+			}
+		}
+	}
+	if related, ok := args["related"].([]interface{}); ok {
+		bead.Related = make([]string, 0, len(related))
+		for _, r := range related {
+			if s, ok := r.(string); ok {
+				bead.Related = append(bead.Related, s)
+			}
+		}
+	}
+
+	// Create the bead
+	createdBead, err := ctx.BeadStore.Create(bead)
+	if err != nil {
+		return "", fmt.Errorf("failed to create bead: %w", err)
+	}
+
+	// Format a nice response
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("New job on the board: %s\n\n", createdBead.ID))
+	sb.WriteString(fmt.Sprintf("Title: %s\n", createdBead.Title))
+	sb.WriteString(fmt.Sprintf("Type: %s\n", createdBead.Type))
+	sb.WriteString(fmt.Sprintf("Priority: %d\n", createdBead.Priority))
+	sb.WriteString(fmt.Sprintf("Status: %s\n", createdBead.Status))
+	if createdBead.Turf != "" {
+		sb.WriteString(fmt.Sprintf("Turf: %s\n", createdBead.Turf))
+	}
+	if createdBead.Description != "" {
+		sb.WriteString(fmt.Sprintf("Description: %s\n", truncate(createdBead.Description, 100)))
+	}
+	sb.WriteString(fmt.Sprintf("Branch: %s\n", createdBead.Branch))
+
+	return sb.String(), nil
+}
+
+func handleListBeads(ctx *ToolContext, args map[string]interface{}) (string, error) {
+	if ctx.BeadStore == nil {
+		return "", fmt.Errorf("bead store not available")
+	}
+
+	// Build filter from args
+	filter := storage.BeadFilter{}
+
+	if status, ok := args["status"].(string); ok && status != "" {
+		filter.Status = models.BeadStatus(status)
+	}
+	if turf, ok := args["turf"].(string); ok {
+		filter.Turf = turf
+	}
+	if assignee, ok := args["assignee"].(string); ok {
+		filter.Assignee = assignee
+	}
+	if beadType, ok := args["type"].(string); ok && beadType != "" {
+		filter.Type = models.BeadType(beadType)
+	}
+
+	beads, err := ctx.BeadStore.List(filter)
+	if err != nil {
+		return "", fmt.Errorf("failed to list beads: %w", err)
+	}
+
+	if len(beads) == 0 {
+		return "No jobs on the board matching those filters.", nil
+	}
+
+	// Priority labels for display
+	priorityLabels := []string{"🔴 Critical", "🟠 High", "🟡 Medium", "🔵 Low", "⚪ Lowest"}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("The job board (%d items):\n\n", len(beads)))
+
+	for _, bead := range beads {
+		// Priority indicator
+		priority := bead.Priority
+		if priority < 0 {
+			priority = 0
+		}
+		if priority > 4 {
+			priority = 4
+		}
+		priorityLabel := priorityLabels[priority]
+
+		sb.WriteString(fmt.Sprintf("• [%s] %s\n", bead.ID, bead.Title))
+		sb.WriteString(fmt.Sprintf("  %s | %s | %s\n", priorityLabel, bead.Type, bead.Status))
+		if bead.Assignee != "" {
+			sb.WriteString(fmt.Sprintf("  Assigned to: %s\n", bead.Assignee))
+		}
+		if bead.Turf != "" {
+			sb.WriteString(fmt.Sprintf("  Turf: %s\n", bead.Turf))
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String(), nil
+}
+
+func handleGetBead(ctx *ToolContext, args map[string]interface{}) (string, error) {
+	id, _ := args["id"].(string)
+
+	if id == "" {
+		return "", fmt.Errorf("id is required")
+	}
+
+	if ctx.BeadStore == nil {
+		return "", fmt.Errorf("bead store not available")
+	}
+
+	bead, err := ctx.BeadStore.Get(id)
+	if err != nil {
+		return "", fmt.Errorf("bead not found: %w", err)
+	}
+
+	data, err := json.MarshalIndent(bead, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize bead: %w", err)
+	}
+
+	return string(data), nil
+}
+
+func handleUpdateBead(ctx *ToolContext, args map[string]interface{}) (string, error) {
+	id, _ := args["id"].(string)
+
+	if id == "" {
+		return "", fmt.Errorf("id is required")
+	}
+
+	if ctx.BeadStore == nil {
+		return "", fmt.Errorf("bead store not available")
+	}
+
+	// Fetch existing bead
+	bead, err := ctx.BeadStore.Get(id)
+	if err != nil {
+		return "", fmt.Errorf("bead not found: %w", err)
+	}
+
+	// Update only fields that are provided
+	if title, ok := args["title"].(string); ok && title != "" {
+		bead.Title = title
+	}
+	if description, ok := args["description"].(string); ok && description != "" {
+		bead.Description = description
+	}
+	if status, ok := args["status"].(string); ok && status != "" {
+		bead.Status = models.BeadStatus(status)
+	}
+	if priority, ok := args["priority"].(float64); ok {
+		bead.Priority = int(priority)
+	}
+	if assignee, ok := args["assignee"].(string); ok {
+		bead.Assignee = assignee
+	}
+	if labels, ok := args["labels"].(string); ok {
+		bead.Labels = labels
+	}
+	if blocks, ok := args["blocks"].([]interface{}); ok {
+		bead.Blocks = make([]string, 0, len(blocks))
+		for _, b := range blocks {
+			if s, ok := b.(string); ok {
+				bead.Blocks = append(bead.Blocks, s)
+			}
+		}
+	}
+	if related, ok := args["related"].([]interface{}); ok {
+		bead.Related = make([]string, 0, len(related))
+		for _, r := range related {
+			if s, ok := r.(string); ok {
+				bead.Related = append(bead.Related, s)
+			}
+		}
+	}
+
+	// Save the updated bead
+	updatedBead, err := ctx.BeadStore.Update(bead)
+	if err != nil {
+		return "", fmt.Errorf("failed to update bead: %w", err)
+	}
+
+	data, err := json.MarshalIndent(updatedBead, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize bead: %w", err)
+	}
+
+	return string(data), nil
+}
+
+func handleCompleteBead(ctx *ToolContext, args map[string]interface{}) (string, error) {
+	id, _ := args["id"].(string)
+	closeReason, _ := args["close_reason"].(string)
+
+	if id == "" {
+		return "", fmt.Errorf("id is required")
+	}
+
+	if ctx.BeadStore == nil {
+		return "", fmt.Errorf("bead store not available")
+	}
+
+	// Fetch existing bead
+	bead, err := ctx.BeadStore.Get(id)
+	if err != nil {
+		return "", fmt.Errorf("bead not found: %w", err)
+	}
+
+	// Mark as completed
+	bead.Status = models.BeadStatusClosed
+	now := time.Now()
+	bead.ClosedAt = &now
+	if closeReason != "" {
+		bead.CloseReason = closeReason
+	} else {
+		bead.CloseReason = "completed"
+	}
+
+	// Save the updated bead
+	_, err = ctx.BeadStore.Update(bead)
+	if err != nil {
+		return "", fmt.Errorf("failed to complete bead: %w", err)
+	}
+
+	return fmt.Sprintf("Job '%s' is done. Closed at %s.", bead.Title, now.Format(time.RFC3339)), nil
 }
 
 // GenerateMCPConfig creates an MCP config file for Claude

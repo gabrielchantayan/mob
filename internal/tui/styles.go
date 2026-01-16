@@ -51,79 +51,79 @@ var panelBaseStyle = lipgloss.NewStyle().Background(bgPanelColor)
 // Tab styles (inside panel, so use panel background)
 var (
 	activeTabStyle = panelBaseStyle.
-		Foreground(primaryColor).
-		Bold(true).
-		Padding(0, 2)
+			Foreground(primaryColor).
+			Bold(true).
+			Padding(0, 2)
 
 	inactiveTabStyle = panelBaseStyle.
-		Foreground(textMutedColor).
-		Padding(0, 2)
+				Foreground(textMutedColor).
+				Padding(0, 2)
 
 	tabBarStyle = baseStyle.
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderBottom(true).
-		BorderForeground(borderSubtleColor)
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderBottom(true).
+			BorderForeground(borderSubtleColor)
 )
 
 // Content styles
 var (
 	titleStyle = baseStyle.
-		Foreground(textColor).
-		Bold(true)
+			Foreground(textColor).
+			Bold(true)
 
 	statusStyle = baseStyle.
-		Foreground(successColor)
+			Foreground(successColor)
 
 	statusInactiveStyle = baseStyle.
-		Foreground(textMutedColor)
+				Foreground(textMutedColor)
 
 	errorStyle = baseStyle.
-		Foreground(errorColor)
+			Foreground(errorColor)
 
 	helpStyle = baseStyle.
-		Foreground(textMutedColor)
+			Foreground(textMutedColor)
 
 	mutedStyle = baseStyle.
-		Foreground(textMutedColor)
+			Foreground(textMutedColor)
 
 	contentStyle = baseStyle.
-		Padding(1, 2)
+			Padding(1, 2)
 
 	// Card/panel style
 	panelStyle = lipgloss.NewStyle().
-		Background(bgPanelColor).
-		Padding(1, 2).
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(borderSubtleColor)
+			Background(bgPanelColor).
+			Padding(1, 2).
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(borderSubtleColor)
 
 	// Label styles - use primary (peach) for labels
 	labelStyle = baseStyle.
-		Foreground(primaryColor).
-		Bold(true)
+			Foreground(primaryColor).
+			Bold(true)
 
 	valueStyle = baseStyle.
-		Foreground(textMutedColor)
+			Foreground(textMutedColor)
 
 	// Key hint style (for showing keyboard shortcuts)
 	keyStyle = baseStyle.
-		Foreground(textColor).
-		Bold(true)
+			Foreground(textColor).
+			Bold(true)
 
 	keyDescStyle = baseStyle.
-		Foreground(textMutedColor)
+			Foreground(textMutedColor)
 
 	// Selector bar style - dark box with blue left accent (like OpenCode's input bar)
 	selectorBarStyle = lipgloss.NewStyle().
-		Background(bgPanelColor).
-		Padding(1, 2)
+				Background(bgPanelColor).
+				Padding(1, 2)
 
 	// Blue left accent bar (rendered separately)
 	accentBarStyle = lipgloss.NewStyle().
-		Foreground(secondaryColor).
-		Background(bgColor)
+			Foreground(secondaryColor).
+			Background(bgPanelColor)
 
 	// Sidebar header style
 	sidebarHeaderStyle = baseStyle.
-		Foreground(primaryColor).
-		Bold(true)
+				Foreground(primaryColor).
+				Bold(true)
 )
