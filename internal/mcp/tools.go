@@ -82,6 +82,10 @@ func GetTools() []*Tool {
 						"type":        "string",
 						"description": "Working directory (defaults to turf path or current dir)",
 					},
+					"bead_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional bead ID to link - auto-completes when associate finishes successfully, marks blocked on failure",
+					},
 				},
 				"required": []string{"turf", "task"},
 			},
@@ -431,6 +435,7 @@ func handleSpawnAssociate(ctx *ToolContext, args map[string]interface{}) (string
 	turf, _ := args["turf"].(string)
 	task, _ := args["task"].(string)
 	workDir, _ := args["work_dir"].(string)
+	beadID, _ := args["bead_id"].(string)
 
 	if turf == "" {
 		return "", fmt.Errorf("turf is required")
@@ -442,6 +447,18 @@ func handleSpawnAssociate(ctx *ToolContext, args map[string]interface{}) (string
 	// Default work directory
 	if workDir == "" {
 		workDir, _ = os.Getwd()
+	}
+
+	// If bead_id provided, update the bead to in_progress
+	if beadID != "" && ctx.BeadStore != nil {
+		bead, err := ctx.BeadStore.Get(beadID)
+		if err != nil {
+			return "", fmt.Errorf("bead not found: %w", err)
+		}
+		bead.Status = models.BeadStatusInProgress
+		if _, err := ctx.BeadStore.Update(bead); err != nil {
+			return "", fmt.Errorf("failed to update bead status: %w", err)
+		}
 	}
 
 	// Spawn the agent with the Associate system prompt
@@ -456,12 +473,13 @@ func handleSpawnAssociate(ctx *ToolContext, args map[string]interface{}) (string
 		return "", fmt.Errorf("failed to spawn associate: %w", err)
 	}
 
-	// Register in registry
+	// Register in registry with linked bead
 	record := &registry.AgentRecord{
 		ID:        spawnedAgent.ID,
 		Type:      "associate",
 		Turf:      turf,
 		Task:      task,
+		BeadID:    beadID, // Link the bead for auto-completion
 		Status:    "active",
 		StartedAt: spawnedAgent.StartedAt,
 	}
@@ -471,7 +489,7 @@ func handleSpawnAssociate(ctx *ToolContext, args map[string]interface{}) (string
 
 	// Execute the task in a background goroutine
 	ctx.TaskWg.Add(1)
-	go func(a *agent.Agent, agentID string, taskDesc string, reg *registry.Registry) {
+	go func(a *agent.Agent, agentID string, taskDesc string, linkedBeadID string, reg *registry.Registry, beadStore *storage.BeadStore) {
 		defer ctx.TaskWg.Done()
 
 		// Update status to working
@@ -484,12 +502,38 @@ func handleSpawnAssociate(ctx *ToolContext, args map[string]interface{}) (string
 		if err != nil {
 			log.Printf("Associate %s failed: %v", agentID, err)
 			reg.UpdateStatus(agentID, "failed")
+
+			// If linked to a bead, mark it as blocked
+			if linkedBeadID != "" && beadStore != nil {
+				if bead, berr := beadStore.Get(linkedBeadID); berr == nil {
+					bead.Status = models.BeadStatusBlocked
+					bead.CloseReason = fmt.Sprintf("associate %s failed: %v", agentID, err)
+					beadStore.Update(bead)
+					log.Printf("Bead %s marked as blocked due to associate failure", linkedBeadID)
+				}
+			}
 		} else {
 			reg.UpdateStatus(agentID, "completed")
-		}
-	}(spawnedAgent, spawnedAgent.ID, task, ctx.Registry)
 
-	return fmt.Sprintf("Associate spawned and working. ID: %s, Task: %s", spawnedAgent.ID, truncate(task, 50)), nil
+			// If linked to a bead, auto-complete it
+			if linkedBeadID != "" && beadStore != nil {
+				if bead, berr := beadStore.Get(linkedBeadID); berr == nil {
+					bead.Status = models.BeadStatusClosed
+					now := time.Now()
+					bead.ClosedAt = &now
+					bead.CloseReason = fmt.Sprintf("completed by associate %s", agentID)
+					beadStore.Update(bead)
+					log.Printf("Bead %s auto-completed by associate %s", linkedBeadID, agentID)
+				}
+			}
+		}
+	}(spawnedAgent, spawnedAgent.ID, task, beadID, ctx.Registry, ctx.BeadStore)
+
+	result := fmt.Sprintf("Associate spawned and working. ID: %s, Task: %s", spawnedAgent.ID, truncate(task, 50))
+	if beadID != "" {
+		result += fmt.Sprintf(", Linked Bead: %s", beadID)
+	}
+	return result, nil
 }
 
 func handleListAgents(ctx *ToolContext, args map[string]interface{}) (string, error) {
