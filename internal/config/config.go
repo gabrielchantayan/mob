@@ -1,5 +1,13 @@
 package config
 
+import "time"
+
+// DefaultAssociateTimeout is the default timeout for associates (10 minutes)
+const DefaultAssociateTimeout = 10 * time.Minute
+
+// DefaultAssociateGracePeriod is the grace period after nudge before force kill (1 minute)
+const DefaultAssociateGracePeriod = 1 * time.Minute
+
 // Config holds the main mob configuration
 type Config struct {
 	Daemon        DaemonConfig        `toml:"daemon"`
@@ -49,4 +57,17 @@ type LoggingConfig struct {
 	Level     string `toml:"level"`
 	Format    string `toml:"format"`
 	Retention string `toml:"retention"`
+}
+
+// GetAssociateTimeout parses the associate timeout string and returns a duration.
+// Returns DefaultAssociateTimeout if the string is empty or invalid.
+func (c *AssociatesConfig) GetAssociateTimeout() time.Duration {
+	if c.Timeout == "" {
+		return DefaultAssociateTimeout
+	}
+	d, err := time.ParseDuration(c.Timeout)
+	if err != nil {
+		return DefaultAssociateTimeout
+	}
+	return d
 }

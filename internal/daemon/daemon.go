@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gabe/mob/internal/agent"
+	"github.com/gabe/mob/internal/config"
 	"github.com/gabe/mob/internal/hook"
 	"github.com/gabe/mob/internal/registry"
 	"github.com/gabe/mob/internal/soldati"
@@ -41,7 +42,8 @@ type Daemon struct {
 	activeAgents map[string]*agent.Agent       // keyed by soldati name
 	hookManagers map[string]*hook.Manager      // keyed by soldati name
 	hookCancels  map[string]context.CancelFunc // keyed by soldati name
-	mu           sync.RWMutex                  // protects activeAgents, hookManagers, hookCancels
+	nudgedAt     map[string]time.Time          // keyed by associate ID, tracks when nudge was sent
+	mu           sync.RWMutex                  // protects activeAgents, hookManagers, hookCancels, nudgedAt
 }
 
 // New creates a new daemon instance
@@ -54,6 +56,7 @@ func New(mobDir string) *Daemon {
 		activeAgents: make(map[string]*agent.Agent),
 		hookManagers: make(map[string]*hook.Manager),
 		hookCancels:  make(map[string]context.CancelFunc),
+		nudgedAt:     make(map[string]time.Time),
 	}
 }
 
@@ -188,6 +191,9 @@ func (d *Daemon) patrol() {
 		return
 	}
 
+	// Check associate timeouts first
+	d.patrolAssociates()
+
 	// Get all registered soldati from TOML files
 	registeredSoldati, err := d.soldatiMgr.List()
 	if err != nil {
@@ -247,6 +253,102 @@ func (d *Daemon) patrol() {
 			delete(d.activeAgents, name)
 		}
 	}
+}
+
+// patrolAssociates checks all associates for timeouts and handles them.
+// Associates that exceed the timeout are first nudged, then force-killed after a grace period.
+func (d *Daemon) patrolAssociates() {
+	if d.registry == nil || d.spawner == nil {
+		return
+	}
+
+	// Get all associates from registry
+	associates, err := d.registry.ListByType("associate")
+	if err != nil {
+		fmt.Printf("Patrol: failed to list associates: %v\n", err)
+		return
+	}
+
+	if len(associates) == 0 {
+		return
+	}
+
+	now := time.Now()
+	timeout := config.DefaultAssociateTimeout
+	gracePeriod := config.DefaultAssociateGracePeriod
+
+	for _, assoc := range associates {
+		// Skip completed or failed associates (they should be cleaned up elsewhere)
+		if assoc.Status == "completed" || assoc.Status == "failed" || assoc.Status == "timed_out" {
+			continue
+		}
+
+		// Calculate how long the associate has been running
+		runningTime := now.Sub(assoc.StartedAt)
+
+		// Check if already nudged
+		d.mu.RLock()
+		nudgeTime, wasNudged := d.nudgedAt[assoc.ID]
+		d.mu.RUnlock()
+
+		if wasNudged {
+			// Check if grace period has expired
+			timeSinceNudge := now.Sub(nudgeTime)
+			if timeSinceNudge > gracePeriod {
+				// Grace period expired - force kill
+				d.forceKillAssociate(assoc, "timeout after nudge grace period")
+			}
+			// Still in grace period, skip
+			continue
+		}
+
+		// Check if timeout exceeded
+		if runningTime > timeout {
+			// First nudge
+			d.nudgeAssociate(assoc)
+		}
+	}
+}
+
+// nudgeAssociate sends a nudge signal to a timed-out associate and records the nudge time
+func (d *Daemon) nudgeAssociate(assoc *registry.AgentRecord) {
+	fmt.Printf("Patrol: associate '%s' exceeded timeout (running since %s), sending nudge\n",
+		assoc.ID, assoc.StartedAt.Format(time.RFC3339))
+
+	// Record nudge time
+	d.mu.Lock()
+	d.nudgedAt[assoc.ID] = time.Now()
+	d.mu.Unlock()
+
+	// Update status to indicate nudged
+	d.registry.UpdateStatus(assoc.ID, "nudged")
+
+	// The actual nudge - update the ping time which should trigger activity check
+	d.registry.Ping(assoc.ID)
+
+	fmt.Printf("Patrol: nudged associate '%s', will force kill in %v if no response\n",
+		assoc.ID, config.DefaultAssociateGracePeriod)
+}
+
+// forceKillAssociate terminates an associate that has exceeded its timeout and grace period
+func (d *Daemon) forceKillAssociate(assoc *registry.AgentRecord, reason string) {
+	fmt.Printf("Patrol: force killing associate '%s' - %s\n", assoc.ID, reason)
+
+	// Kill in spawner (if it has a process)
+	if err := d.spawner.Kill(assoc.ID); err != nil {
+		// Ignore errors - process might already be dead
+		fmt.Printf("Patrol: warning - spawner.Kill failed for '%s': %v\n", assoc.ID, err)
+	}
+
+	// Update registry status to timed_out
+	d.registry.UpdateStatus(assoc.ID, "timed_out")
+
+	// Clean up nudge tracking
+	d.mu.Lock()
+	delete(d.nudgedAt, assoc.ID)
+	d.mu.Unlock()
+
+	fmt.Printf("Patrol: associate '%s' terminated due to timeout\n", assoc.ID)
 }
 
 // spawnSoldatiAgent creates a Claude instance for a soldati
