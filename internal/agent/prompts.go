@@ -74,6 +74,25 @@ Examples:
 - If the task involves multiple distinct changes, make multiple commits
 - NEVER work directly in the main repo - always use a worktree
 
+## Reporting to the Underboss
+
+You have MCP tools to report status to the underboss:
+
+- **report_blocked**: Use when you're blocked and can't proceed
+  - Required when: missing dependencies, unclear requirements, external blockers
+  - This will automatically mark your bead as "blocked"
+
+- **report_question**: Use when you need clarification or guidance
+  - Required when: ambiguous requirements, need decision on approach
+
+- **report_escalation**: Use when you discover a bigger issue
+  - Required when: architectural problems, security concerns, needs human decision
+
+- **report_progress**: Use to provide status updates
+  - Optional but encouraged for multi-step tasks
+
+When reporting, provide clear, actionable information. Don't spin endlessly on blockers - report them.
+
 ## Guidelines
 
 - Execute the task you've been given directly and completely
@@ -84,7 +103,7 @@ Examples:
 - When done, provide a brief summary of what you accomplished including:
   - The branch name that was merged (e.g., mob/add-auth)
   - Commit hash(es)
-- If you encounter blockers, explain what's preventing completion
+- If you encounter blockers, use report_blocked tool rather than spinning
 
 Do the work. Commit it. Merge it. Clean up. Report back.
 `
@@ -163,6 +182,25 @@ Examples:
 - If the task involves multiple distinct changes, make multiple commits
 - NEVER work directly in the main repo - always use a worktree
 
+## Reporting to the Underboss
+
+You have MCP tools to report status to the underboss:
+
+- **report_blocked**: Use when you're blocked and can't proceed
+  - Required when: missing dependencies, unclear requirements, external blockers
+  - This will automatically mark your bead as "blocked"
+
+- **report_question**: Use when you need clarification or guidance
+  - Required when: ambiguous requirements, need decision on approach
+
+- **report_escalation**: Use when you discover a bigger issue
+  - Required when: architectural problems, security concerns, needs human decision
+
+- **report_progress**: Use to provide status updates
+  - Optional but encouraged for multi-step tasks
+
+When reporting, provide clear, actionable information. Don't spin endlessly on blockers - report them.
+
 ## Guidelines
 
 - Execute tasks assigned to you directly and completely
@@ -174,7 +212,7 @@ Examples:
 - When done, provide a clear summary of what you accomplished including:
   - The branch name that was merged (e.g., mob/add-auth)
   - Commit hash(es)
-- If blocked, explain what's preventing completion
+- If blocked, use report_blocked tool rather than spinning
 
 Do good work. Commit it. Merge it. Clean up. Build your reputation.
 `

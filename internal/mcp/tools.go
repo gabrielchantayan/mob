@@ -408,6 +408,128 @@ func GetTools() []*Tool {
 			},
 			Handler: handleListTurfs,
 		},
+		{
+			Name:        "report_blocked",
+			Description: "Report that you're blocked on a task. Use when you can't proceed due to missing dependencies, unclear requirements, or external blockers.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"message": map[string]interface{}{
+						"type":        "string",
+						"description": "Explain what's blocking you and what's needed to proceed",
+					},
+					"bead_id": map[string]interface{}{
+						"type":        "string",
+						"description": "The bead ID you're blocked on (optional)",
+					},
+				},
+				"required": []string{"message"},
+			},
+			Handler: handleReportBlocked,
+		},
+		{
+			Name:        "report_question",
+			Description: "Ask a question to the underboss. Use when you need clarification or guidance.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"message": map[string]interface{}{
+						"type":        "string",
+						"description": "Your question or request for clarification",
+					},
+					"bead_id": map[string]interface{}{
+						"type":        "string",
+						"description": "The bead ID this question relates to (optional)",
+					},
+				},
+				"required": []string{"message"},
+			},
+			Handler: handleReportQuestion,
+		},
+		{
+			Name:        "report_escalation",
+			Description: "Escalate an issue that needs human attention. Use when you've discovered a bigger problem, architectural issue, or something requiring a decision beyond your scope.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"message": map[string]interface{}{
+						"type":        "string",
+						"description": "Describe the issue and why it needs escalation",
+					},
+					"bead_id": map[string]interface{}{
+						"type":        "string",
+						"description": "The bead ID this escalation relates to (optional)",
+					},
+				},
+				"required": []string{"message"},
+			},
+			Handler: handleReportEscalation,
+		},
+		{
+			Name:        "report_progress",
+			Description: "Report progress on your work. Use to provide status updates on multi-step tasks.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"message": map[string]interface{}{
+						"type":        "string",
+						"description": "Progress update (e.g., 'Completed step A, starting step B')",
+					},
+					"bead_id": map[string]interface{}{
+						"type":        "string",
+						"description": "The bead ID you're reporting progress on (optional)",
+					},
+				},
+				"required": []string{"message"},
+			},
+			Handler: handleReportProgress,
+		},
+		{
+			Name:        "list_reports",
+			Description: "List agent reports with optional filtering.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"agent_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by agent ID",
+					},
+					"agent_name": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by agent name",
+					},
+					"bead_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by bead ID",
+					},
+					"type": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by report type: completed, blocked, question, escalation, progress",
+						"enum":        []string{"completed", "blocked", "question", "escalation", "progress"},
+					},
+					"handled": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Filter by handled status (omit for all)",
+					},
+				},
+			},
+			Handler: handleListReports,
+		},
+		{
+			Name:        "mark_report_handled",
+			Description: "Mark a report as handled.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"id": map[string]interface{}{
+						"type":        "string",
+						"description": "Report ID to mark as handled",
+					},
+				},
+				"required": []string{"id"},
+			},
+			Handler: handleMarkReportHandled,
+		},
 	}
 }
 
@@ -1362,4 +1484,226 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// Report handlers
+
+func handleReportBlocked(ctx *ToolContext, args map[string]interface{}) (string, error) {
+	message, _ := args["message"].(string)
+	beadID, _ := args["bead_id"].(string)
+
+	if message == "" {
+		return "", fmt.Errorf("message is required")
+	}
+
+	// Try to get agent context from environment or registry
+	// For now, allow anonymous reports or require explicit agent info in the future
+	agentID := os.Getenv("MOB_AGENT_ID")
+	agentName := os.Getenv("MOB_AGENT_NAME")
+
+	report := &models.AgentReport{
+		AgentID:   agentID,
+		AgentName: agentName,
+		BeadID:    beadID,
+		Type:      models.ReportTypeBlocked,
+		Message:   message,
+	}
+
+	// Create report store if we have access to mob dir
+	reportStore, err := storage.NewReportStore(filepath.Join(ctx.MobDir, ".mob", "reports"))
+	if err != nil {
+		return "", fmt.Errorf("failed to create report store: %w", err)
+	}
+
+	createdReport, err := reportStore.Create(report)
+	if err != nil {
+		return "", fmt.Errorf("failed to create report: %w", err)
+	}
+
+	// If associated with a bead, mark the bead as blocked
+	if beadID != "" && ctx.BeadStore != nil {
+		bead, err := ctx.BeadStore.Get(beadID)
+		if err == nil {
+			bead.Status = models.BeadStatusBlocked
+			ctx.BeadStore.Update(bead)
+		}
+	}
+
+	data, _ := json.MarshalIndent(createdReport, "", "  ")
+	return fmt.Sprintf("Blocked report filed (ID: %s):\n%s", createdReport.ID, string(data)), nil
+}
+
+func handleReportQuestion(ctx *ToolContext, args map[string]interface{}) (string, error) {
+	message, _ := args["message"].(string)
+	beadID, _ := args["bead_id"].(string)
+
+	if message == "" {
+		return "", fmt.Errorf("message is required")
+	}
+
+	agentID := os.Getenv("MOB_AGENT_ID")
+	agentName := os.Getenv("MOB_AGENT_NAME")
+
+	report := &models.AgentReport{
+		AgentID:   agentID,
+		AgentName: agentName,
+		BeadID:    beadID,
+		Type:      models.ReportTypeQuestion,
+		Message:   message,
+	}
+
+	reportStore, err := storage.NewReportStore(filepath.Join(ctx.MobDir, ".mob", "reports"))
+	if err != nil {
+		return "", fmt.Errorf("failed to create report store: %w", err)
+	}
+
+	createdReport, err := reportStore.Create(report)
+	if err != nil {
+		return "", fmt.Errorf("failed to create report: %w", err)
+	}
+
+	data, _ := json.MarshalIndent(createdReport, "", "  ")
+	return fmt.Sprintf("Question filed (ID: %s):\n%s", createdReport.ID, string(data)), nil
+}
+
+func handleReportEscalation(ctx *ToolContext, args map[string]interface{}) (string, error) {
+	message, _ := args["message"].(string)
+	beadID, _ := args["bead_id"].(string)
+
+	if message == "" {
+		return "", fmt.Errorf("message is required")
+	}
+
+	agentID := os.Getenv("MOB_AGENT_ID")
+	agentName := os.Getenv("MOB_AGENT_NAME")
+
+	report := &models.AgentReport{
+		AgentID:   agentID,
+		AgentName: agentName,
+		BeadID:    beadID,
+		Type:      models.ReportTypeEscalation,
+		Message:   message,
+	}
+
+	reportStore, err := storage.NewReportStore(filepath.Join(ctx.MobDir, ".mob", "reports"))
+	if err != nil {
+		return "", fmt.Errorf("failed to create report store: %w", err)
+	}
+
+	createdReport, err := reportStore.Create(report)
+	if err != nil {
+		return "", fmt.Errorf("failed to create report: %w", err)
+	}
+
+	data, _ := json.MarshalIndent(createdReport, "", "  ")
+	return fmt.Sprintf("Escalation filed (ID: %s):\n%s", createdReport.ID, string(data)), nil
+}
+
+func handleReportProgress(ctx *ToolContext, args map[string]interface{}) (string, error) {
+	message, _ := args["message"].(string)
+	beadID, _ := args["bead_id"].(string)
+
+	if message == "" {
+		return "", fmt.Errorf("message is required")
+	}
+
+	agentID := os.Getenv("MOB_AGENT_ID")
+	agentName := os.Getenv("MOB_AGENT_NAME")
+
+	report := &models.AgentReport{
+		AgentID:   agentID,
+		AgentName: agentName,
+		BeadID:    beadID,
+		Type:      models.ReportTypeProgress,
+		Message:   message,
+	}
+
+	reportStore, err := storage.NewReportStore(filepath.Join(ctx.MobDir, ".mob", "reports"))
+	if err != nil {
+		return "", fmt.Errorf("failed to create report store: %w", err)
+	}
+
+	createdReport, err := reportStore.Create(report)
+	if err != nil {
+		return "", fmt.Errorf("failed to create report: %w", err)
+	}
+
+	data, _ := json.MarshalIndent(createdReport, "", "  ")
+	return fmt.Sprintf("Progress reported (ID: %s):\n%s", createdReport.ID, string(data)), nil
+}
+
+func handleListReports(ctx *ToolContext, args map[string]interface{}) (string, error) {
+	reportStore, err := storage.NewReportStore(filepath.Join(ctx.MobDir, ".mob", "reports"))
+	if err != nil {
+		return "", fmt.Errorf("failed to create report store: %w", err)
+	}
+
+	filter := storage.ReportFilter{}
+	if agentID, ok := args["agent_id"].(string); ok && agentID != "" {
+		filter.AgentID = agentID
+	}
+	if agentName, ok := args["agent_name"].(string); ok && agentName != "" {
+		filter.AgentName = agentName
+	}
+	if beadID, ok := args["bead_id"].(string); ok && beadID != "" {
+		filter.BeadID = beadID
+	}
+	if reportType, ok := args["type"].(string); ok && reportType != "" {
+		filter.Type = models.ReportType(reportType)
+	}
+	if handled, ok := args["handled"].(bool); ok {
+		filter.Handled = &handled
+	}
+
+	reports, err := reportStore.List(filter)
+	if err != nil {
+		return "", fmt.Errorf("failed to list reports: %w", err)
+	}
+
+	if len(reports) == 0 {
+		return "No reports found matching the criteria.", nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Found %d report(s):\n\n", len(reports)))
+
+	for _, r := range reports {
+		status := "unhandled"
+		if r.Handled {
+			status = "handled"
+		}
+		sb.WriteString(fmt.Sprintf("• [%s] %s (%s) - %s\n", r.ID, r.Type, status, r.Timestamp.Format(time.RFC3339)))
+		if r.AgentName != "" {
+			sb.WriteString(fmt.Sprintf("  Agent: %s\n", r.AgentName))
+		} else if r.AgentID != "" {
+			sb.WriteString(fmt.Sprintf("  Agent: %s\n", r.AgentID))
+		}
+		if r.BeadID != "" {
+			sb.WriteString(fmt.Sprintf("  Bead: %s\n", r.BeadID))
+		}
+		sb.WriteString(fmt.Sprintf("  Message: %s\n", truncate(r.Message, 100)))
+		sb.WriteString("\n")
+	}
+
+	return sb.String(), nil
+}
+
+func handleMarkReportHandled(ctx *ToolContext, args map[string]interface{}) (string, error) {
+	id, _ := args["id"].(string)
+
+	if id == "" {
+		return "", fmt.Errorf("id is required")
+	}
+
+	reportStore, err := storage.NewReportStore(filepath.Join(ctx.MobDir, ".mob", "reports"))
+	if err != nil {
+		return "", fmt.Errorf("failed to create report store: %w", err)
+	}
+
+	report, err := reportStore.MarkHandled(id)
+	if err != nil {
+		return "", fmt.Errorf("failed to mark report as handled: %w", err)
+	}
+
+	return fmt.Sprintf("Report %s marked as handled.", report.ID), nil
 }
