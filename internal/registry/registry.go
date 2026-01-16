@@ -24,6 +24,7 @@ type AgentRecord struct {
 	SessionID   string     `json:"session_id,omitempty"`
 	Status      string     `json:"status"` // active, idle, stuck, dead, completed, failed, timed_out
 	Task        string     `json:"task,omitempty"`
+	BeadID      string     `json:"bead_id,omitempty"` // Linked bead for auto-completion (associates)
 	StartedAt   time.Time  `json:"started_at"`
 	LastPing    time.Time  `json:"last_ping"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"` // When associate finished (for cleanup TTL)
