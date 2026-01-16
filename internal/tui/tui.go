@@ -883,8 +883,11 @@ func (m Model) renderMainArea(width int) string {
 		b.WriteString(m.renderAgents())
 	}
 
+	// Fixed height to prevent layout shifts when input grows
+	contentHeight := m.height - 6 // Account for padding and help text
 	return lipgloss.NewStyle().
 		Width(width).
+		Height(contentHeight).
 		Render(b.String())
 }
 
