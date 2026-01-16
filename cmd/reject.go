@@ -12,10 +12,11 @@ import (
 )
 
 var rejectCmd = &cobra.Command{
-	Use:   "reject <bead-id> [reason]",
-	Short: "Reject a pending bead",
-	Long:  `Reject a bead that is in pending_approval status, closing it with a reason.`,
-	Args:  cobra.MinimumNArgs(1),
+	Use:     "reject <bead-id> [reason]",
+	Short:   "Reject a pending bead",
+	Long:    `Reject a bead that is in pending_approval status, closing it with a reason.`,
+	Aliases: []string{"rej"},
+	Args:    cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		beadID := args[0]
 		reason := ""

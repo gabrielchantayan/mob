@@ -10,10 +10,11 @@ import (
 )
 
 var approveCmd = &cobra.Command{
-	Use:   "approve <bead-id>",
-	Short: "Approve a pending bead",
-	Long:  `Approve a bead that is in pending_approval status, allowing work to proceed.`,
-	Args:  cobra.ExactArgs(1),
+	Use:     "approve <bead-id>",
+	Short:   "Approve a pending bead",
+	Long:    `Approve a bead that is in pending_approval status, allowing work to proceed.`,
+	Aliases: []string{"app"},
+	Args:    cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		beadID := args[0]
 

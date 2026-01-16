@@ -12,10 +12,11 @@ import (
 )
 
 var addCmd = &cobra.Command{
-	Use:   "add <description>",
-	Short: "Create a new bead (task)",
-	Long:  `Create a new bead with the given description. The bead will be added to the open queue.`,
-	Args:  cobra.MinimumNArgs(1),
+	Use:     "add <description>",
+	Short:   "Create a new bead (task)",
+	Long:    `Create a new bead with the given description. The bead will be added to the open queue.`,
+	Aliases: []string{"a"},
+	Args:    cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		description := strings.Join(args, " ")
 

@@ -12,8 +12,9 @@ import (
 )
 
 var nudgeCmd = &cobra.Command{
-	Use:   "nudge [soldati|all]",
-	Short: "Nudge stuck agents",
+	Use:     "nudge [soldati|all]",
+	Aliases: []string{"n"},
+	Short:   "Nudge stuck agents",
 	Long: `Send a wake-up signal to stuck agents.
 
 Use 'all' to nudge all agents, or specify a soldati name to nudge a specific agent.

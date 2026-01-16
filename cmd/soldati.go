@@ -215,6 +215,61 @@ Example:
 	},
 }
 
+var soldatiAttachCmd = &cobra.Command{
+	Use:   "attach <name>",
+	Short: "Attach to a soldati session (observe/message/control)",
+	Long: `Attach to a running soldati session to observe output, send messages, or take control.
+
+This command connects you to the soldati's running Claude Code session, allowing you to:
+- Observe real-time output from the agent
+- Send messages or commands to the agent
+- Take control and interact directly with the session
+
+Note: The soldati must be actively running for attachment to work.`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		name := args[0]
+
+		// Verify soldati exists
+		dir, err := getSoldatiDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+		mgr, err := soldati.NewManager(dir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+		if _, err := mgr.Get(name); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: soldati '%s' not found\n", name)
+			os.Exit(1)
+		}
+
+		// Check if soldati is running
+		reg := registry.New(getRegistryPath())
+		agent, err := reg.GetByName(name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: soldati '%s' is not currently running\n", name)
+			fmt.Fprintf(os.Stderr, "Start it with the daemon: mob daemon start\n")
+			os.Exit(1)
+		}
+
+		fmt.Printf("Attaching to soldati '%s' (PID: %d)...\n", name, agent.PID)
+		fmt.Println()
+		fmt.Println("Note: Session attachment is not yet fully implemented.")
+		fmt.Println("This feature requires deeper integration with Claude Code's stdio streams.")
+		fmt.Println()
+		fmt.Printf("Agent status: %s\n", agent.Status)
+		if agent.Task != "" {
+			fmt.Printf("Current task: %s\n", agent.Task)
+		}
+		fmt.Printf("Last active: %s\n", time.Since(agent.LastPing).Round(time.Second))
+	},
+}
+
 func getSoldatiDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -247,5 +302,6 @@ func init() {
 	soldatiCmd.AddCommand(soldatiNewCmd)
 	soldatiCmd.AddCommand(soldatiKillCmd)
 	soldatiCmd.AddCommand(soldatiAssignCmd)
+	soldatiCmd.AddCommand(soldatiAttachCmd)
 	rootCmd.AddCommand(soldatiCmd)
 }
