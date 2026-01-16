@@ -101,7 +101,7 @@ func (s *BeadStore) List(filter BeadFilter) ([]*models.Bead, error) {
 
 // ListReady returns beads that are ready for assignment:
 // - Status is "open"
-// - All blocking beads (in Blocks array) are closed
+// - Not blocked by any unclosed beads (no unclosed beads list this bead in their Blocks array)
 // - Sorted by priority (0 = highest first)
 func (s *BeadStore) ListReady(turf string) ([]*models.Bead, error) {
 	s.mu.RLock()
@@ -112,11 +112,14 @@ func (s *BeadStore) ListReady(turf string) ([]*models.Bead, error) {
 		return nil, err
 	}
 
-	// Build map of closed bead IDs for blocker checking
-	closedIDs := make(map[string]bool)
+	// Build map of beads that are blocked by unclosed beads
+	// If bead A has Blocks: ["bd-xyz"], then bd-xyz cannot start until A is closed
+	blockedBeads := make(map[string]bool)
 	for _, b := range allBeads {
-		if b.Status == models.BeadStatusClosed {
-			closedIDs[b.ID] = true
+		if b.Status != models.BeadStatusClosed {
+			for _, blockedID := range b.Blocks {
+				blockedBeads[blockedID] = true
+			}
 		}
 	}
 
@@ -132,15 +135,8 @@ func (s *BeadStore) ListReady(turf string) ([]*models.Bead, error) {
 			continue
 		}
 
-		// Check blockers - all must be closed
-		allBlockersClosed := true
-		for _, blockerID := range b.Blocks {
-			if !closedIDs[blockerID] {
-				allBlockersClosed = false
-				break
-			}
-		}
-		if !allBlockersClosed {
+		// Skip if this bead is blocked by any unclosed beads
+		if blockedBeads[b.ID] {
 			continue
 		}
 
