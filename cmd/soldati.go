@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/gabe/mob/internal/hook"
 	"github.com/gabe/mob/internal/registry"
 	"github.com/gabe/mob/internal/soldati"
 	"github.com/spf13/cobra"
@@ -150,12 +152,80 @@ var soldatiKillCmd = &cobra.Command{
 	},
 }
 
+var soldatiAssignBeadID string
+
+var soldatiAssignCmd = &cobra.Command{
+	Use:   "assign <name> <task>",
+	Short: "Assign work to a soldati",
+	Long: `Assign a task to a soldati via their hook file.
+The daemon must be running for the soldati to receive and process the work.
+
+Example:
+  mob soldati assign vinnie "Fix the login bug in auth.go"
+  mob soldati assign vinnie --bead bd-a1b2 "Implement the feature described in the bead"`,
+	Args: cobra.MinimumNArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		name := args[0]
+		task := strings.Join(args[1:], " ")
+
+		// Verify soldati exists
+		dir, err := getSoldatiDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+		mgr, err := soldati.NewManager(dir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+		if _, err := mgr.Get(name); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: soldati '%s' not found\n", name)
+			os.Exit(1)
+		}
+
+		// Create hook manager and write assignment
+		hookDir := getHookDir()
+		hookMgr, err := hook.NewManager(hookDir, name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating hook manager: %v\n", err)
+			os.Exit(1)
+		}
+
+		h := &hook.Hook{
+			Type:      hook.HookTypeAssign,
+			BeadID:    soldatiAssignBeadID,
+			Message:   task,
+			Timestamp: time.Now(),
+		}
+
+		if err := hookMgr.Write(h); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing hook: %v\n", err)
+			os.Exit(1)
+		}
+
+		if soldatiAssignBeadID != "" {
+			fmt.Printf("Assigned bead '%s' to soldati '%s'\n", soldatiAssignBeadID, name)
+		} else {
+			fmt.Printf("Assigned task to soldati '%s': %s\n", name, truncateStr(task, 50))
+		}
+		fmt.Println("(Daemon must be running for soldati to process the work)")
+	},
+}
+
 func getSoldatiDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 	return filepath.Join(home, "mob", "soldati"), nil
+}
+
+func getHookDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, "mob", ".mob", "soldati")
 }
 
 func getRegistryPath() string {
@@ -171,8 +241,11 @@ func truncateStr(s string, maxLen int) string {
 }
 
 func init() {
+	soldatiAssignCmd.Flags().StringVar(&soldatiAssignBeadID, "bead", "", "Bead ID to associate with the task")
+
 	soldatiCmd.AddCommand(soldatiListCmd)
 	soldatiCmd.AddCommand(soldatiNewCmd)
 	soldatiCmd.AddCommand(soldatiKillCmd)
+	soldatiCmd.AddCommand(soldatiAssignCmd)
 	rootCmd.AddCommand(soldatiCmd)
 }

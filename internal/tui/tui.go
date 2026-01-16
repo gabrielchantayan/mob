@@ -351,6 +351,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.sendMessage()
 				}
 				return m, nil
+			// Scroll keybindings while input is focused
+			case "ctrl+j":
+				m.chatViewport.LineDown(1)
+				return m, nil
+			case "ctrl+k":
+				m.chatViewport.LineUp(1)
+				return m, nil
+			case "ctrl+d":
+				m.chatViewport.HalfViewDown()
+				return m, nil
+			case "ctrl+u":
+				m.chatViewport.HalfViewUp()
+				return m, nil
+			case "ctrl+f":
+				m.chatViewport.ViewDown()
+				return m, nil
+			case "ctrl+b":
+				m.chatViewport.ViewUp()
+				return m, nil
 			}
 			// Update text input
 			var cmd tea.Cmd
@@ -389,6 +408,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatInput.Focus()
 				return m, textarea.Blink
 			}
+		// Vim-style scroll keybindings when input is not focused
+		case "j":
+			if m.activeTab == tabChat {
+				m.chatViewport.LineDown(1)
+				return m, nil
+			}
+		case "k":
+			if m.activeTab == tabChat {
+				m.chatViewport.LineUp(1)
+				return m, nil
+			}
+		case "ctrl+d":
+			if m.activeTab == tabChat {
+				m.chatViewport.HalfViewDown()
+				return m, nil
+			}
+		case "ctrl+u":
+			if m.activeTab == tabChat {
+				m.chatViewport.HalfViewUp()
+				return m, nil
+			}
+		case "ctrl+f":
+			if m.activeTab == tabChat {
+				m.chatViewport.ViewDown()
+				return m, nil
+			}
+		case "ctrl+b":
+			if m.activeTab == tabChat {
+				m.chatViewport.ViewUp()
+				return m, nil
+			}
+		case "g":
+			if m.activeTab == tabChat {
+				m.chatViewport.GotoTop()
+				return m, nil
+			}
+		case "G":
+			if m.activeTab == tabChat {
+				m.chatViewport.GotoBottom()
+				return m, nil
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -396,6 +456,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.updateLayout()
 		m.updateChatViewport()
+
+	case tea.MouseMsg:
+		// Handle mouse wheel scrolling in chat viewport
+		if m.activeTab == tabChat {
+			var cmd tea.Cmd
+			m.chatViewport, cmd = m.chatViewport.Update(msg)
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	// Update viewport for scrolling
@@ -981,31 +1049,23 @@ func (m Model) renderAssistantMessage(msg ChatMessage, width int) string {
 	// Footer with model and timing - OpenCode style: "▣ Mode · model · duration"
 	// paddingLeft 3 to match text parts
 	if msg.Model != "" || msg.DurationMs > 0 {
-		// OpenCode uses colored square for agent, we'll use secondary color
-		square := lipgloss.NewStyle().
-			Foreground(secondaryColor).
-			Background(bgColor).
-			Render("▣")
-
-		mode := lipgloss.NewStyle().
-			Foreground(textColor).
-			Background(bgColor).
-			Render("Build") // Default mode
-
-		modelName := lipgloss.NewStyle().
-			Foreground(textMutedColor).
-			Background(bgColor).
-			Render(" · " + formatModelName(msg.Model))
-
-		duration := ""
+		// Build footer content
+		footerContent := "▣ Build"
+		if msg.Model != "" {
+			footerContent += " · " + formatModelName(msg.Model)
+		}
 		if msg.DurationMs > 0 {
-			duration = lipgloss.NewStyle().
-				Foreground(textMutedColor).
-				Background(bgColor).
-				Render(fmt.Sprintf(" · %.1fs", float64(msg.DurationMs)/1000.0))
+			footerContent += fmt.Sprintf(" · %.1fs", float64(msg.DurationMs)/1000.0)
 		}
 
-		b.WriteString(fmt.Sprintf("\n   %s %s%s%s\n", square, mode, modelName, duration))
+		// Style the entire footer line with background filling the width
+		footerStyle := lipgloss.NewStyle().
+			Foreground(textMutedColor).
+			Background(bgColor).
+			PaddingLeft(3).
+			Width(width)
+
+		b.WriteString("\n" + footerStyle.Render(footerContent) + "\n")
 	}
 
 	return b.String()
@@ -1016,6 +1076,11 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 
 	// Box-drawing border character (OpenCode uses "┃")
 	borderChar := "┃"
+
+	// Line style with background filling the width
+	lineStyle := lipgloss.NewStyle().
+		Background(bgColor).
+		Width(width)
 
 	switch block.Type {
 	case agent.ContentTypeThinking:
@@ -1032,19 +1097,19 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 		}
 		headerStyled := lipgloss.NewStyle().
 			Foreground(textMutedColor).
-			Background(bgColor).
 			Italic(true).
 			Render(header)
 
 		// marginTop 1
-		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("%s  %s\n", border, headerStyled))
+		b.WriteString(lineStyle.Render("") + "\n")
+		b.WriteString(lineStyle.Render(border + "  " + headerStyled) + "\n")
 
 		// Thinking content (muted, wrapped) - paddingLeft 2 from border
 		if block.Text != "" {
 			lines := strings.Split(wrapText(block.Text, width-6), "\n")
 			for _, line := range lines {
-				b.WriteString(fmt.Sprintf("%s  %s\n", border, mutedStyle.Render(line)))
+				styledLine := lipgloss.NewStyle().Foreground(textMutedColor).Render(line)
+				b.WriteString(lineStyle.Render(border + "  " + styledLine) + "\n")
 			}
 		}
 
@@ -1060,7 +1125,6 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 		toolHeader := fmt.Sprintf("%s %s", icon, block.Name)
 		headerStyled := lipgloss.NewStyle().
 			Foreground(textMutedColor).
-			Background(bgColor).
 			Render(toolHeader)
 
 		// Extract and display description from input
@@ -1071,23 +1135,30 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 			if len(desc) > width-12 {
 				desc = desc[:width-15] + "..."
 			}
-			descStyled = " " + desc
+			descStyled = lipgloss.NewStyle().Foreground(textMutedColor).Render(" " + desc)
 		}
 
-		// Inline format like OpenCode: icon name description
-		b.WriteString(fmt.Sprintf("      %s%s\n", headerStyled,
-			lipgloss.NewStyle().Foreground(textMutedColor).Background(bgColor).Render(descStyled)))
+		// Inline format like OpenCode: icon name description with full-width background
+		toolLineStyle := lipgloss.NewStyle().
+			Background(bgColor).
+			PaddingLeft(6).
+			Width(width)
+		b.WriteString(toolLineStyle.Render(headerStyled + descStyled) + "\n")
 
 	case agent.ContentTypeText:
 		// OpenCode TextPart: paddingLeft 3, marginTop 1
 		// marginTop 1
-		b.WriteString("\n")
+		b.WriteString(lineStyle.Render("") + "\n")
+
+		textLineStyle := lipgloss.NewStyle().
+			Foreground(textColor).
+			Background(bgColor).
+			PaddingLeft(3).
+			Width(width)
 
 		lines := strings.Split(wrapText(block.Text, width-6), "\n")
 		for _, line := range lines {
-			// paddingLeft 3
-			b.WriteString(fmt.Sprintf("   %s\n",
-				lipgloss.NewStyle().Foreground(textColor).Background(bgColor).Render(line)))
+			b.WriteString(textLineStyle.Render(line) + "\n")
 		}
 	}
 
@@ -1216,13 +1287,21 @@ func (m Model) renderHelp() string {
 			}{
 				{"enter", "send"},
 				{"alt+enter", "newline"},
+				{"ctrl+j/k", "scroll"},
+				{"ctrl+u/d", "½page"},
 				{"esc", "cancel"},
 			}
 		} else {
 			items = append(items, struct {
 				key  string
 				desc string
-			}{"i", "type"})
+			}{"i", "type"}, struct {
+				key  string
+				desc string
+			}{"j/k", "scroll"}, struct {
+				key  string
+				desc string
+			}{"g/G", "top/btm"})
 		}
 	}
 
