@@ -365,7 +365,7 @@ func TestBeadStore_ListReady(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Bead 4: Open (blocker for bead 5)
+	// Bead 4: Open (blocks bead 5, making bead 5 not ready)
 	bead4 := &models.Bead{
 		Title:     "Open blocker",
 		Status:    models.BeadStatusOpen,
@@ -380,18 +380,24 @@ func TestBeadStore_ListReady(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Bead 5: Open with open blocker (should NOT be ready)
+	// Bead 5: Open, blocked by bead4 (should NOT be ready)
 	bead5 := &models.Bead{
 		Title:     "Task blocked by open",
 		Status:    models.BeadStatusOpen,
 		Priority:  3,
 		Type:      models.BeadTypeTask,
 		Turf:      "backend",
-		Blocks:    []string{bead4.ID},
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	_, err = store.Create(bead5)
+	bead5, err = store.Create(bead5)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Update bead4 to block bead5
+	bead4.Blocks = []string{bead5.ID}
+	_, err = store.Update(bead4)
 	if err != nil {
 		t.Fatal(err)
 	}
