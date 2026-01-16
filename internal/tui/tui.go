@@ -129,9 +129,10 @@ type Model struct {
 	currentModel     string
 
 	// Beads by status (for sidebar)
-	beadsInProgress int
-	beadsOpen       int
-	beadsClosed     int
+	beadsInProgress      int
+	beadsOpen            int
+	beadsPendingApproval int
+	beadsClosed          int
 
 	// Active soldati (for sidebar)
 	activeSoldati []SoldatiStatus
@@ -312,6 +313,7 @@ func (m *Model) loadData() {
 		if err == nil {
 			m.beadsOpen = 0
 			m.beadsInProgress = 0
+			m.beadsPendingApproval = 0
 			m.beadsClosed = 0
 			for _, b := range allBeads {
 				switch b.Status {
@@ -319,6 +321,8 @@ func (m *Model) loadData() {
 					m.beadsOpen++
 				case models.BeadStatusInProgress:
 					m.beadsInProgress++
+				case models.BeadStatusPendingApproval:
+					m.beadsPendingApproval++
 				case models.BeadStatusClosed:
 					m.beadsClosed++
 				}
@@ -921,7 +925,7 @@ func (m Model) renderSidebarBeads(width int) string {
 	b.WriteString(mutedStyle.Render(strings.Repeat("─", width)))
 	b.WriteString("\n")
 
-	totalBeads := m.beadsInProgress + m.beadsOpen + m.beadsClosed
+	totalBeads := m.beadsInProgress + m.beadsOpen + m.beadsPendingApproval + m.beadsClosed
 
 	if totalBeads == 0 {
 		b.WriteString(mutedStyle.Render("No beads"))
@@ -930,6 +934,11 @@ func (m Model) renderSidebarBeads(width int) string {
 			b.WriteString(fmt.Sprintf("%s %d in progress\n",
 				panelBaseStyle.Foreground(primaryColor).Render("●"),
 				m.beadsInProgress))
+		}
+		if m.beadsPendingApproval > 0 {
+			b.WriteString(fmt.Sprintf("%s %d pending approval\n",
+				panelBaseStyle.Foreground(lipgloss.Color("#FFA500")).Render("⚠"),
+				m.beadsPendingApproval))
 		}
 		if m.beadsOpen > 0 {
 			b.WriteString(fmt.Sprintf("%s %d open\n",

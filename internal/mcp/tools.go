@@ -237,6 +237,10 @@ func GetTools() []*Tool {
 						"description": "Related bead IDs",
 						"items":       map[string]interface{}{"type": "string"},
 					},
+					"pending_approval": map[string]interface{}{
+						"type":        "boolean",
+						"description": "If true, creates bead with pending_approval status requiring approval via 'mob approve <bead-id>' before work can start",
+					},
 				},
 				"required": []string{"title"},
 			},
@@ -728,6 +732,11 @@ func handleAssignBead(ctx *ToolContext, args map[string]interface{}) (string, er
 				return "", fmt.Errorf("bead not found: %w", err)
 			}
 
+			// Check if bead is pending approval
+			if bead.Status == models.BeadStatusPendingApproval {
+				return "", fmt.Errorf("bead %s is pending approval - use 'mob approve %s' to approve it before assigning", beadID, beadID)
+			}
+
 			// Update assignee to the agent's name (or ID if no name)
 			assigneeName := agentRecord.Name
 			if assigneeName == "" {
@@ -820,9 +829,15 @@ func handleCreateBead(ctx *ToolContext, args map[string]interface{}) (string, er
 	}
 
 	// Build the bead from args
+	// Check if pending_approval is requested
+	status := models.BeadStatusOpen
+	if pendingApproval, ok := args["pending_approval"].(bool); ok && pendingApproval {
+		status = models.BeadStatusPendingApproval
+	}
+
 	bead := &models.Bead{
 		Title:  title,
-		Status: models.BeadStatusOpen,
+		Status: status,
 	}
 
 	// Optional fields
@@ -878,6 +893,10 @@ func handleCreateBead(ctx *ToolContext, args map[string]interface{}) (string, er
 	sb.WriteString(fmt.Sprintf("Type: %s\n", createdBead.Type))
 	sb.WriteString(fmt.Sprintf("Priority: %d\n", createdBead.Priority))
 	sb.WriteString(fmt.Sprintf("Status: %s\n", createdBead.Status))
+	if createdBead.Status == models.BeadStatusPendingApproval {
+		sb.WriteString("\n⚠ This bead requires approval before work can start.\n")
+		sb.WriteString(fmt.Sprintf("Approve with: mob approve %s\n", createdBead.ID))
+	}
 	if createdBead.Turf != "" {
 		sb.WriteString(fmt.Sprintf("Turf: %s\n", createdBead.Turf))
 	}
