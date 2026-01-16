@@ -154,6 +154,11 @@ type Model struct {
 	daemonLogViewport viewport.Model
 	daemonLogLines    []string
 	daemonLogFile     string
+
+	// Usage statistics
+	sessionInputTokens  int
+	sessionOutputTokens int
+	sessionTotalCost    float64
 }
 
 // New creates a new TUI model
@@ -392,6 +397,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 			m.chatError = ""
 			m.currentBlocks = nil
+			// Update usage statistics
+			m.sessionInputTokens += msg.response.InputTokens
+			m.sessionOutputTokens += msg.response.OutputTokens
+			m.sessionTotalCost += msg.response.TotalCost
 		}
 		m.updateChatViewport()
 		return m, nil
@@ -418,6 +427,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Timestamp:  time.Now(),
 			})
 			m.chatError = ""
+			// Update usage statistics
+			m.sessionInputTokens += msg.response.InputTokens
+			m.sessionOutputTokens += msg.response.OutputTokens
+			m.sessionTotalCost += msg.response.TotalCost
 		}
 		m.currentBlocks = nil
 		m.updateChatViewport()
@@ -870,6 +883,10 @@ func (m Model) renderSidebar() string {
 
 	// Agents section
 	b.WriteString(m.renderSidebarAgents(width))
+	b.WriteString("\n\n")
+
+	// Usage section
+	b.WriteString(m.renderSidebarUsage(width))
 
 	// Sidebar container with left border
 	return lipgloss.NewStyle().
@@ -976,6 +993,38 @@ func (m Model) renderSidebarAgents(width int) string {
 				labelStyle.Render(s.Name),
 				panelBaseStyle.Foreground(statusColor).Render(s.Status)))
 		}
+	}
+
+	return b.String()
+}
+
+func (m Model) renderSidebarUsage(width int) string {
+	var b strings.Builder
+
+	b.WriteString(sidebarHeaderStyle.Render("┃ Usage"))
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render(strings.Repeat("─", width)))
+	b.WriteString("\n")
+
+	// Session stats
+	sessionDuration := time.Since(m.sessionStartTime)
+	b.WriteString(labelStyle.Render("Session") + "  " + valueStyle.Render(formatDuration(sessionDuration)) + "\n")
+
+	// Token usage
+	totalTokens := m.sessionInputTokens + m.sessionOutputTokens
+	if totalTokens > 0 {
+		b.WriteString(fmt.Sprintf("%s  %s\n",
+			labelStyle.Render("Tokens"),
+			valueStyle.Render(fmt.Sprintf("%d in / %d out", m.sessionInputTokens, m.sessionOutputTokens))))
+	} else {
+		b.WriteString(labelStyle.Render("Tokens") + "  " + mutedStyle.Render("none yet") + "\n")
+	}
+
+	// Cost
+	if m.sessionTotalCost > 0 {
+		b.WriteString(fmt.Sprintf("%s  %s\n",
+			labelStyle.Render("Cost"),
+			valueStyle.Render(fmt.Sprintf("$%.4f", m.sessionTotalCost))))
 	}
 
 	return b.String()
