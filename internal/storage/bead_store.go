@@ -42,10 +42,12 @@ func NewBeadStore(dir string) (*BeadStore, error) {
 }
 
 // generateID creates a short random ID for beads
-func generateID() string {
+func generateID() (string, error) {
 	b := make([]byte, 4)
-	rand.Read(b)
-	return "bd-" + hex.EncodeToString(b)[:4]
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("failed to generate random ID: %w", err)
+	}
+	return "bd-" + hex.EncodeToString(b)[:4], nil
 }
 
 // Create adds a new bead to the store
@@ -53,7 +55,11 @@ func (s *BeadStore) Create(bead *models.Bead) (*models.Bead, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	bead.ID = generateID()
+	id, err := generateID()
+	if err != nil {
+		return nil, err
+	}
+	bead.ID = id
 	bead.CreatedAt = time.Now()
 	bead.UpdatedAt = time.Now()
 	bead.Branch = "mob/" + bead.ID
