@@ -32,7 +32,11 @@ var turfAddCmd = &cobra.Command{
 
 		mainBranch, _ := cmd.Flags().GetString("branch")
 
-		turfsPath := getTurfsPath()
+		turfsPath, err := getTurfsPath()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		mgr, err := turf.NewManager(turfsPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -53,7 +57,11 @@ var turfListCmd = &cobra.Command{
 	Short:   "List all registered turfs",
 	Aliases: []string{"ls"},
 	Run: func(cmd *cobra.Command, args []string) {
-		turfsPath := getTurfsPath()
+		turfsPath, err := getTurfsPath()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		mgr, err := turf.NewManager(turfsPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -83,7 +91,11 @@ var turfRemoveCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		name := args[0]
 
-		turfsPath := getTurfsPath()
+		turfsPath, err := getTurfsPath()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		mgr, err := turf.NewManager(turfsPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -99,9 +111,12 @@ var turfRemoveCmd = &cobra.Command{
 	},
 }
 
-func getTurfsPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "mob", "turfs.toml")
+func getTurfsPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+	return filepath.Join(home, "mob", "turfs.toml"), nil
 }
 
 func init() {
