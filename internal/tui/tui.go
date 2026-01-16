@@ -168,12 +168,12 @@ func New() Model {
 
 	// Initialize textarea for multiline input
 	ti := textarea.New()
-	ti.Placeholder = "Type a message... (Ctrl+Enter to send)"
+	ti.Placeholder = "Type a message... (Enter to send, Alt+Enter for newline)"
 	ti.CharLimit = 10000
 	ti.SetWidth(80)
 	ti.SetHeight(minInputHeight) // Start small, grows dynamically
 	ti.ShowLineNumbers = false
-	ti.KeyMap.InsertNewline.SetKeys("enter") // Enter adds newline
+	ti.KeyMap.InsertNewline.SetKeys("alt+enter") // Alt+Enter for newline (shift+enter requires bubbletea v2)
 
 	// Set textarea styles to match the panel background
 	ti.FocusedStyle.Base = panelBaseStyle
@@ -456,17 +456,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc":
 				m.chatInput.Blur()
 				return m, nil
-			case "ctrl+enter":
-				// Ctrl+Enter sends the message
+			case "enter":
+				// Enter sends the message
 				if !m.chatWaiting && strings.TrimSpace(m.chatInput.Value()) != "" {
 					return m, m.sendMessage()
 				}
 				return m, nil
 			// Scroll keybindings while input is focused
-			case "ctrl+j":
+			// Note: ctrl+j is used for newline in textarea, use ctrl+n/ctrl+p for line scroll
+			case "ctrl+n":
 				m.chatViewport.LineDown(1)
 				return m, nil
-			case "ctrl+k":
+			case "ctrl+p":
 				m.chatViewport.LineUp(1)
 				return m, nil
 			case "ctrl+d":
@@ -1608,8 +1609,8 @@ func (m Model) renderHelp() string {
 				key  string
 				desc string
 			}{
-				{"enter", "newline"},
-				{"ctrl+enter", "send"},
+				{"alt+enter", "newline"},
+				{"enter", "send"},
 				{"ctrl+j/k", "scroll"},
 				{"ctrl+u/d", "½page"},
 				{"esc", "cancel"},

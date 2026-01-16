@@ -358,6 +358,15 @@ func GetTools() []*Tool {
 			},
 			Handler: handleCompleteBead,
 		},
+		{
+			Name:        "list_turfs",
+			Description: "Get the turf mappings. Returns all registered turfs with their paths so you know where projects are located.",
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+			Handler: handleListTurfs,
+		},
 	}
 }
 
@@ -1177,6 +1186,32 @@ func GenerateMCPConfig(mobDir string) (string, error) {
 	}
 
 	return configPath, nil
+}
+
+func handleListTurfs(ctx *ToolContext, args map[string]interface{}) (string, error) {
+	if ctx.TurfManager == nil {
+		return "", fmt.Errorf("turf manager not available")
+	}
+
+	turfs := ctx.TurfManager.List()
+
+	if len(turfs) == 0 {
+		return "No turfs registered. Use 'mob turf add' to register a project.", nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Registered turfs (%d):\n\n", len(turfs)))
+
+	for _, t := range turfs {
+		sb.WriteString(fmt.Sprintf("• %s\n", t.Name))
+		sb.WriteString(fmt.Sprintf("  Path: %s\n", t.Path))
+		if t.MainBranch != "" {
+			sb.WriteString(fmt.Sprintf("  Main branch: %s\n", t.MainBranch))
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String(), nil
 }
 
 func truncate(s string, maxLen int) string {
