@@ -30,11 +30,12 @@ type tab int
 const (
 	tabChat tab = iota
 	tabDaemon
+	tabAgentOutput
 	tabAgents
 )
 
 // Tab names for display
-var tabNames = []string{"Chat", "Daemon", "Agents"}
+var tabNames = []string{"Chat", "Daemon", "Agent Output", "Agents"}
 
 // Layout constants
 const (
@@ -155,10 +156,24 @@ type Model struct {
 	daemonLogLines    []string
 	daemonLogFile     string
 
+	// Agent output state
+	agentOutputViewport viewport.Model
+	agentOutputLines    []AgentOutputLine
+	agentOutputFilter   string // Filter by agent name (empty = all)
+
 	// Usage statistics
 	sessionInputTokens  int
 	sessionOutputTokens int
 	sessionTotalCost    float64
+}
+
+// AgentOutputLine represents a line of agent output with metadata
+type AgentOutputLine struct {
+	AgentID   string
+	AgentName string
+	Line      string
+	Timestamp time.Time
+	Stream    string
 }
 
 // New creates a new TUI model
@@ -189,6 +204,9 @@ func New() Model {
 	// Initialize viewport for daemon logs
 	daemonVp := viewport.New(80, 10)
 
+	// Initialize viewport for agent output
+	agentOutputVp := viewport.New(80, 10)
+
 	// Initialize underboss
 	spawner := agent.NewSpawner()
 	ub := underboss.New(mobDir, spawner)
@@ -197,20 +215,23 @@ func New() Model {
 	ti.Focus()
 
 	m := Model{
-		activeTab:         tabChat, // Chat-first
-		sidebarVisible:    true,
-		sidebarWidth:      sidebarWidthConst,
-		sessionStartTime:  time.Now(),
-		daemonStatus:      "unknown",
-		chatInput:         ti,
-		chatViewport:      vp,
-		chatMessages:      []ChatMessage{},
-		currentBlocks:     []agent.ChatContentBlock{},
-		underboss:         ub,
-		mobDir:            mobDir,
-		daemonLogViewport: daemonVp,
-		daemonLogLines:    []string{},
-		daemonLogFile:     filepath.Join(mobDir, ".mob", "daemon.log"),
+		activeTab:           tabChat, // Chat-first
+		sidebarVisible:      true,
+		sidebarWidth:        sidebarWidthConst,
+		sessionStartTime:    time.Now(),
+		daemonStatus:        "unknown",
+		chatInput:           ti,
+		chatViewport:        vp,
+		chatMessages:        []ChatMessage{},
+		currentBlocks:       []agent.ChatContentBlock{},
+		underboss:           ub,
+		mobDir:              mobDir,
+		daemonLogViewport:   daemonVp,
+		daemonLogLines:      []string{},
+		daemonLogFile:       filepath.Join(mobDir, ".mob", "daemon.log"),
+		agentOutputViewport: agentOutputVp,
+		agentOutputLines:    []AgentOutputLine{},
+		agentOutputFilter:   "",
 	}
 	m.loadData()
 	return m
@@ -259,6 +280,10 @@ func (m *Model) updateLayout() {
 	}
 	m.daemonLogViewport.Width = mainWidth - 4
 	m.daemonLogViewport.Height = daemonViewportHeight
+
+	// Update agent output viewport dimensions (same as daemon log)
+	m.agentOutputViewport.Width = mainWidth - 4
+	m.agentOutputViewport.Height = daemonViewportHeight
 }
 
 // updateInputHeight adjusts textarea height based on content lines
@@ -509,6 +534,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activeTab = tabDaemon
 			m.updateFocus()
 		case "3":
+			m.activeTab = tabAgentOutput
+			m.updateFocus()
+		case "4":
 			m.activeTab = tabAgents
 			m.updateFocus()
 		case "s":
@@ -529,6 +557,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatViewport.LineDown(1)
 			case tabDaemon:
 				m.daemonLogViewport.LineDown(1)
+			case tabAgentOutput:
+				m.agentOutputViewport.LineDown(1)
 			}
 			return m, nil
 		case "k":
@@ -537,6 +567,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatViewport.LineUp(1)
 			case tabDaemon:
 				m.daemonLogViewport.LineUp(1)
+			case tabAgentOutput:
+				m.agentOutputViewport.LineUp(1)
 			}
 			return m, nil
 		case "ctrl+d":
@@ -545,6 +577,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatViewport.HalfViewDown()
 			case tabDaemon:
 				m.daemonLogViewport.HalfViewDown()
+			case tabAgentOutput:
+				m.agentOutputViewport.HalfViewDown()
 			}
 			return m, nil
 		case "ctrl+u":
@@ -553,6 +587,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatViewport.HalfViewUp()
 			case tabDaemon:
 				m.daemonLogViewport.HalfViewUp()
+			case tabAgentOutput:
+				m.agentOutputViewport.HalfViewUp()
 			}
 			return m, nil
 		case "ctrl+f":
@@ -561,6 +597,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatViewport.ViewDown()
 			case tabDaemon:
 				m.daemonLogViewport.ViewDown()
+			case tabAgentOutput:
+				m.agentOutputViewport.ViewDown()
 			}
 			return m, nil
 		case "ctrl+b":
@@ -569,6 +607,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatViewport.ViewUp()
 			case tabDaemon:
 				m.daemonLogViewport.ViewUp()
+			case tabAgentOutput:
+				m.agentOutputViewport.ViewUp()
 			}
 			return m, nil
 		case "g":
@@ -577,6 +617,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatViewport.GotoTop()
 			case tabDaemon:
 				m.daemonLogViewport.GotoTop()
+			case tabAgentOutput:
+				m.agentOutputViewport.GotoTop()
 			}
 			return m, nil
 		case "G":
@@ -585,6 +627,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatViewport.GotoBottom()
 			case tabDaemon:
 				m.daemonLogViewport.GotoBottom()
+			case tabAgentOutput:
+				m.agentOutputViewport.GotoBottom()
 			}
 			return m, nil
 		}
@@ -607,6 +651,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.daemonLogViewport, cmd = m.daemonLogViewport.Update(msg)
 			cmds = append(cmds, cmd)
+		case tabAgentOutput:
+			var cmd tea.Cmd
+			m.agentOutputViewport, cmd = m.agentOutputViewport.Update(msg)
+			cmds = append(cmds, cmd)
 		}
 	}
 
@@ -617,6 +665,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatViewport, cmd = m.chatViewport.Update(msg)
 	case tabDaemon:
 		m.daemonLogViewport, cmd = m.daemonLogViewport.Update(msg)
+	case tabAgentOutput:
+		m.agentOutputViewport, cmd = m.agentOutputViewport.Update(msg)
 	}
 	cmds = append(cmds, cmd)
 
@@ -827,6 +877,8 @@ func (m Model) renderMainArea(width int) string {
 		b.WriteString(m.renderChat())
 	case tabDaemon:
 		b.WriteString(m.renderDaemon())
+	case tabAgentOutput:
+		b.WriteString(m.renderAgentOutput())
 	case tabAgents:
 		b.WriteString(m.renderAgents())
 	}
@@ -1212,6 +1264,92 @@ func (m Model) renderAgents() string {
 	return b.String()
 }
 
+func (m Model) renderAgentOutput() string {
+	if len(m.agentOutputLines) == 0 {
+		return mutedStyle.Render("No agent output yet. Agents will appear here when they start working.")
+	}
+
+	var b strings.Builder
+
+	// Header
+	filterText := "all agents"
+	if m.agentOutputFilter != "" {
+		filterText = m.agentOutputFilter
+	}
+	header := fmt.Sprintf("Agent Output - Showing: %s (%d lines)",
+		filterText, len(m.agentOutputLines))
+	b.WriteString(labelStyle.Render(header))
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render(strings.Repeat("─", m.agentOutputViewport.Width)))
+	b.WriteString("\n")
+
+	// Output viewport
+	b.WriteString(m.agentOutputViewport.View())
+
+	return b.String()
+}
+
+// updateAgentOutputViewport refreshes the agent output viewport content
+func (m *Model) updateAgentOutputViewport() {
+	if len(m.agentOutputLines) == 0 {
+		m.agentOutputViewport.SetContent(mutedStyle.Render("Waiting for agent output..."))
+		return
+	}
+
+	var b strings.Builder
+	width := m.agentOutputViewport.Width - 4
+	if width < 40 {
+		width = 80
+	}
+
+	for _, line := range m.agentOutputLines {
+		// Apply filter if set
+		if m.agentOutputFilter != "" && line.AgentName != m.agentOutputFilter {
+			continue
+		}
+
+		// Format: [timestamp] [agent-name] line
+		timestamp := line.Timestamp.Format("15:04:05")
+		timestampStyled := mutedStyle.Render(timestamp)
+
+		// Color-code by agent name (cycle through a few colors)
+		agentColor := getAgentColor(line.AgentName)
+		agentNameStyled := lipgloss.NewStyle().Foreground(agentColor).Render(line.AgentName)
+
+		// Style based on stream
+		var lineStyled string
+		if line.Stream == "stderr" {
+			lineStyled = errorStyle.Render(line.Line)
+		} else {
+			lineStyled = baseStyle.Foreground(textColor).Render(line.Line)
+		}
+
+		b.WriteString(fmt.Sprintf("%s [%s] %s\n", timestampStyled, agentNameStyled, lineStyled))
+	}
+
+	m.agentOutputViewport.SetContent(b.String())
+	m.agentOutputViewport.GotoBottom()
+}
+
+// getAgentColor returns a color for an agent name (deterministic based on name)
+func getAgentColor(name string) lipgloss.Color {
+	colors := []lipgloss.Color{
+		lipgloss.Color("#00D4FF"), // cyan
+		lipgloss.Color("#A6E22E"), // green
+		lipgloss.Color("#F92672"), // pink
+		lipgloss.Color("#FD971F"), // orange
+		lipgloss.Color("#AE81FF"), // purple
+		lipgloss.Color("#E6DB74"), // yellow
+	}
+
+	// Simple hash of the name to pick a color
+	hash := 0
+	for _, c := range name {
+		hash += int(c)
+	}
+	return colors[hash%len(colors)]
+}
+
 func formatRelativeTime(t time.Time) string {
 	d := time.Since(t)
 	if d < time.Minute {
@@ -1586,7 +1724,7 @@ func (m Model) renderHelp() string {
 		desc string
 	}{
 		{"tab", "navigate"},
-		{"1-3", "jump"},
+		{"1-4", "jump"},
 	}
 
 	// Add sidebar toggle if terminal is wide enough
@@ -1628,6 +1766,14 @@ func (m Model) renderHelp() string {
 			}{"g/G", "top/btm"})
 		}
 	case tabDaemon:
+		items = append(items, struct {
+			key  string
+			desc string
+		}{"j/k", "scroll"}, struct {
+			key  string
+			desc string
+		}{"g/G", "top/btm"})
+	case tabAgentOutput:
 		items = append(items, struct {
 			key  string
 			desc string

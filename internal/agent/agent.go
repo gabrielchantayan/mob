@@ -203,14 +203,30 @@ func (a *Agent) ChatStream(message string, callback StreamCallback) (*ChatRespon
 		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
-	// Capture stderr
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	// Set up stderr pipe for capturing
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
 
 	// Start the command
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start claude: %w", err)
 	}
+
+	// Start goroutine to capture stderr
+	var stderrBuf bytes.Buffer
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			line := scanner.Text()
+			stderrBuf.WriteString(line + "\n")
+			// Emit stderr to spawner
+			if a.spawner != nil {
+				a.spawner.emitOutput(a.ID, a.Name, line, "stderr")
+			}
+		}
+	}()
 
 	// Parse streaming output
 	response := &ChatResponse{}
@@ -222,6 +238,10 @@ func (a *Agent) ChatStream(message string, callback StreamCallback) (*ChatRespon
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		// Emit stdout to spawner
+		if a.spawner != nil {
+			a.spawner.emitOutput(a.ID, a.Name, line, "stdout")
+		}
 		if line == "" {
 			continue
 		}
@@ -336,11 +356,11 @@ func (a *Agent) ChatStream(message string, callback StreamCallback) (*ChatRespon
 
 	// Wait for command to finish
 	if err := cmd.Wait(); err != nil {
-		return nil, fmt.Errorf("claude command failed: %w (stderr: %s)", err, stderr.String())
+		return nil, fmt.Errorf("claude command failed: %w (stderr: %s)", err, stderrBuf.String())
 	}
 
 	if len(response.Blocks) == 0 {
-		return nil, fmt.Errorf("no response from claude (stderr: %s)", stderr.String())
+		return nil, fmt.Errorf("no response from claude (stderr: %s)", stderrBuf.String())
 	}
 
 	return response, nil
