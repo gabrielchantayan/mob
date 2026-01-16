@@ -225,17 +225,32 @@ func (u *Underboss) Registry() *registry.Registry {
 // SpawnSoldati creates a new persistent worker (Soldati)
 // This provides direct access for CLI/TUI, bypassing MCP
 func (u *Underboss) SpawnSoldati(name, turf, workDir string) (*agent.Agent, error) {
+	// Create soldati manager to persist to .toml files (for CLI visibility)
+	soldatiDir := filepath.Join(u.mobDir, "soldati")
+	mgr, err := soldati.NewManager(soldatiDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create soldati manager: %w", err)
+	}
+
 	// Generate name if not provided
 	if name == "" {
-		agents, err := u.registry.ListByType("soldati")
-		if err != nil {
-			return nil, fmt.Errorf("failed to list existing soldati: %w", err)
-		}
-		usedNames := make([]string, 0, len(agents))
+		// Check both registry and persisted soldati for used names
+		agents, _ := u.registry.ListByType("soldati")
+		persistedSoldati, _ := mgr.List()
+
+		usedNames := make(map[string]bool)
 		for _, a := range agents {
-			usedNames = append(usedNames, a.Name)
+			usedNames[a.Name] = true
 		}
-		name = soldati.GenerateUniqueName(usedNames)
+		for _, s := range persistedSoldati {
+			usedNames[s.Name] = true
+		}
+
+		nameSlice := make([]string, 0, len(usedNames))
+		for n := range usedNames {
+			nameSlice = append(nameSlice, n)
+		}
+		name = soldati.GenerateUniqueName(nameSlice)
 	}
 
 	// Default work directory
@@ -247,12 +262,21 @@ func (u *Underboss) SpawnSoldati(name, turf, workDir string) (*agent.Agent, erro
 		}
 	}
 
-	// Spawn the agent
+	// Persist soldati to .toml file (so CLI can see it)
+	if _, err := mgr.Create(name); err != nil {
+		// If it already exists, that's fine - just continue
+		if _, getErr := mgr.Get(name); getErr != nil {
+			return nil, fmt.Errorf("failed to persist soldati: %w", err)
+		}
+	}
+
+	// Spawn the agent with system prompt
 	a, err := u.spawner.SpawnWithOptions(agent.SpawnOptions{
-		Type:    agent.AgentTypeSoldati,
-		Name:    name,
-		Turf:    turf,
-		WorkDir: workDir,
+		Type:         agent.AgentTypeSoldati,
+		Name:         name,
+		Turf:         turf,
+		WorkDir:      workDir,
+		SystemPrompt: agent.SoldatiSystemPrompt,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to spawn soldati: %w", err)
@@ -286,12 +310,13 @@ func (u *Underboss) SpawnAssociate(turf, task, workDir string) (*agent.Agent, er
 		}
 	}
 
-	// Spawn the agent
+	// Spawn the agent with system prompt
 	a, err := u.spawner.SpawnWithOptions(agent.SpawnOptions{
-		Type:    agent.AgentTypeAssociate,
-		Name:    "", // Associates don't get names
-		Turf:    turf,
-		WorkDir: workDir,
+		Type:         agent.AgentTypeAssociate,
+		Name:         "", // Associates don't get names
+		Turf:         turf,
+		WorkDir:      workDir,
+		SystemPrompt: agent.AssociateSystemPrompt,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to spawn associate: %w", err)

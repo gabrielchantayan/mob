@@ -648,17 +648,17 @@ func (m Model) renderSidebarBeads(width int) string {
 	} else {
 		if m.beadsInProgress > 0 {
 			b.WriteString(fmt.Sprintf("%s %d in progress\n",
-				lipgloss.NewStyle().Foreground(primaryColor).Render("●"),
+				panelBaseStyle.Foreground(primaryColor).Render("●"),
 				m.beadsInProgress))
 		}
 		if m.beadsOpen > 0 {
 			b.WriteString(fmt.Sprintf("%s %d open\n",
-				lipgloss.NewStyle().Foreground(textMutedColor).Render("○"),
+				panelBaseStyle.Foreground(textMutedColor).Render("○"),
 				m.beadsOpen))
 		}
 		if m.beadsClosed > 0 {
 			b.WriteString(fmt.Sprintf("%s %d closed\n",
-				lipgloss.NewStyle().Foreground(successColor).Render("✓"),
+				panelBaseStyle.Foreground(successColor).Render("✓"),
 				m.beadsClosed))
 		}
 	}
@@ -684,7 +684,7 @@ func (m Model) renderSidebarAgents(width int) string {
 			}
 			b.WriteString(fmt.Sprintf("%s  %s\n",
 				labelStyle.Render(s.Name),
-				lipgloss.NewStyle().Foreground(statusColor).Render(s.Status)))
+				panelBaseStyle.Foreground(statusColor).Render(s.Status)))
 		}
 	}
 

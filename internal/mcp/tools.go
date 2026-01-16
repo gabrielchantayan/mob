@@ -224,12 +224,13 @@ func handleSpawnSoldati(ctx *ToolContext, args map[string]interface{}) (string, 
 		return "", fmt.Errorf("failed to create soldati: %w", err)
 	}
 
-	// Spawn the agent
+	// Spawn the agent with the Soldati system prompt
 	spawnedAgent, err := ctx.Spawner.SpawnWithOptions(agent.SpawnOptions{
-		Type:    agent.AgentTypeSoldati,
-		Name:    name,
-		Turf:    turf,
-		WorkDir: workDir,
+		Type:         agent.AgentTypeSoldati,
+		Name:         name,
+		Turf:         turf,
+		WorkDir:      workDir,
+		SystemPrompt: agent.SoldatiSystemPrompt,
 	})
 	if err != nil {
 		// Clean up TOML file on failure
@@ -272,12 +273,13 @@ func handleSpawnAssociate(ctx *ToolContext, args map[string]interface{}) (string
 		workDir, _ = os.Getwd()
 	}
 
-	// Spawn the agent
-	agent, err := ctx.Spawner.SpawnWithOptions(agent.SpawnOptions{
-		Type:    agent.AgentTypeAssociate,
-		Name:    "", // Associates don't get names
-		Turf:    turf,
-		WorkDir: workDir,
+	// Spawn the agent with the Associate system prompt
+	spawnedAgent, err := ctx.Spawner.SpawnWithOptions(agent.SpawnOptions{
+		Type:         agent.AgentTypeAssociate,
+		Name:         "", // Associates don't get names
+		Turf:         turf,
+		WorkDir:      workDir,
+		SystemPrompt: agent.AssociateSystemPrompt,
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to spawn associate: %w", err)
@@ -285,21 +287,34 @@ func handleSpawnAssociate(ctx *ToolContext, args map[string]interface{}) (string
 
 	// Register in registry
 	record := &registry.AgentRecord{
-		ID:        agent.ID,
+		ID:        spawnedAgent.ID,
 		Type:      "associate",
 		Turf:      turf,
 		Task:      task,
 		Status:    "active",
-		StartedAt: agent.StartedAt,
+		StartedAt: spawnedAgent.StartedAt,
 	}
 	if err := ctx.Registry.Register(record); err != nil {
 		return "", fmt.Errorf("failed to register associate: %w", err)
 	}
 
-	// TODO: Send the task to the associate
-	// For now, just note that the task was assigned
+	// Execute the task in a background goroutine
+	go func(a *agent.Agent, agentID string, taskDesc string, reg *registry.Registry) {
+		// Update status to working
+		reg.UpdateStatus(agentID, "working")
 
-	return fmt.Sprintf("Associate spawned for quick job. ID: %s, Task: %s", agent.ID, truncate(task, 50)), nil
+		// Execute the task
+		_, err := a.Chat(taskDesc)
+
+		// Update status based on result
+		if err != nil {
+			reg.UpdateStatus(agentID, "failed")
+		} else {
+			reg.UpdateStatus(agentID, "completed")
+		}
+	}(spawnedAgent, spawnedAgent.ID, task, ctx.Registry)
+
+	return fmt.Sprintf("Associate spawned and working. ID: %s, Task: %s", spawnedAgent.ID, truncate(task, 50)), nil
 }
 
 func handleListAgents(ctx *ToolContext, args map[string]interface{}) (string, error) {
