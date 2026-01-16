@@ -14,6 +14,7 @@ import (
 	"github.com/gabe/mob/internal/hook"
 	"github.com/gabe/mob/internal/registry"
 	"github.com/gabe/mob/internal/soldati"
+	"github.com/gabe/mob/internal/turf"
 )
 
 // State represents the daemon's operational state
@@ -36,6 +37,7 @@ type Daemon struct {
 	spawner      *agent.Spawner
 	registry     *registry.Registry
 	soldatiMgr   *soldati.Manager
+	turfMgr      *turf.Manager
 	activeAgents map[string]*agent.Agent       // keyed by soldati name
 	hookManagers map[string]*hook.Manager      // keyed by soldati name
 	hookCancels  map[string]context.CancelFunc // keyed by soldati name
@@ -77,7 +79,7 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to write PID file: %w", err)
 	}
 
-	// Initialize spawner, registry, and soldati manager
+	// Initialize spawner, registry, soldati manager, and turf manager
 	d.spawner = agent.NewSpawner()
 	d.registry = registry.New(registry.DefaultPath(d.mobDir))
 	soldatiDir := filepath.Join(d.mobDir, "soldati")
@@ -89,6 +91,14 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to create soldati manager: %w", err)
 	}
 	d.soldatiMgr = soldatiMgr
+
+	// Initialize turf manager for resolving turf names to paths
+	turfsPath := filepath.Join(d.mobDir, "turfs.toml")
+	turfMgr, err := turf.NewManager(turfsPath)
+	if err != nil {
+		return fmt.Errorf("failed to create turf manager: %w", err)
+	}
+	d.turfMgr = turfMgr
 
 	// Set up context for graceful shutdown
 	d.ctx, d.cancel = context.WithCancel(context.Background())
@@ -434,12 +444,28 @@ func (d *Daemon) checkAgentHealth(name string, record *registry.AgentRecord) {
 	d.registry.Ping(record.ID)
 }
 
+// resolveTurfPath resolves a turf name to its actual filesystem path
+func (d *Daemon) resolveTurfPath(turfName string) string {
+	if turfName == "" {
+		return d.mobDir
+	}
+	// If it looks like an absolute path already, use it directly
+	if filepath.IsAbs(turfName) {
+		return turfName
+	}
+	// Try to resolve via turf manager
+	if d.turfMgr != nil {
+		if t, err := d.turfMgr.Get(turfName); err == nil {
+			return t.Path
+		}
+	}
+	// Fallback to mob directory
+	return d.mobDir
+}
+
 // respawnSoldati recreates an agent process for an existing registry entry
 func (d *Daemon) respawnSoldati(name string, record *registry.AgentRecord) error {
-	workDir := d.mobDir
-	if record.Turf != "" {
-		workDir = record.Turf
-	}
+	workDir := d.resolveTurfPath(record.Turf)
 
 	// Spawn a new agent process
 	a, err := d.spawner.SpawnWithOptions(agent.SpawnOptions{
