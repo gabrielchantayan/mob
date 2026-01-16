@@ -38,8 +38,8 @@ var tabNames = []string{"Chat", "Logs", "Agents"}
 const (
 	sidebarWidthConst  = 42  // Fixed sidebar width
 	minWidthForSidebar = 120 // Below this, hide sidebar
-	minInputHeight     = 1   // Minimum textarea height (single line)
-	maxInputHeight     = 10  // Maximum textarea height before scrolling
+	minInputHeight     = 3   // Minimum textarea height
+	maxInputHeight     = 24  // Maximum textarea height before scrolling
 )
 
 // SoldatiStatus for sidebar display
@@ -212,16 +212,27 @@ func (m *Model) updateLayout() {
 		mainWidth = 40
 	}
 
-	// Update viewport dimensions
-	m.chatViewport.Width = mainWidth - 4
-	m.chatViewport.Height = m.height - 12
-
-	// Update input width and height
+	// Update input width and height first (so we know the input height)
 	m.chatInput.SetWidth(mainWidth - 8)
 	m.updateInputHeight()
+
+	// Calculate viewport height dynamically based on input height
+	// Layout: padding(2) + tabbar(3) + viewport + input(dynamic) + status(1) + help(2) + padding(2)
+	// Fixed overhead = ~10 lines, plus the dynamic input height
+	inputHeight := m.chatInput.Height()
+	fixedOverhead := 10 // tabs, borders, help, padding, etc.
+	viewportHeight := m.height - fixedOverhead - inputHeight
+	if viewportHeight < 5 {
+		viewportHeight = 5
+	}
+
+	// Update viewport dimensions
+	m.chatViewport.Width = mainWidth - 4
+	m.chatViewport.Height = viewportHeight
 }
 
 // updateInputHeight adjusts textarea height based on content lines
+// and recalculates viewport height so the input expands upward
 func (m *Model) updateInputHeight() {
 	content := m.chatInput.Value()
 
@@ -240,7 +251,18 @@ func (m *Model) updateInputHeight() {
 		height = maxInputHeight
 	}
 
+	oldHeight := m.chatInput.Height()
 	m.chatInput.SetHeight(height)
+
+	// If input height changed, recalculate viewport height so input expands upward
+	if height != oldHeight && m.height > 0 {
+		fixedOverhead := 10 // tabs, borders, help, padding, etc.
+		viewportHeight := m.height - fixedOverhead - height
+		if viewportHeight < 5 {
+			viewportHeight = 5
+		}
+		m.chatViewport.Height = viewportHeight
+	}
 }
 
 // loadData fetches current state from the various managers
