@@ -205,6 +205,114 @@ func (m *Manager) save(soldati *models.Soldati) error {
 	return nil
 }
 
+// AssignTurf assigns a soldati to a specific turf
+func (m *Manager) AssignTurf(name, turf string) error {
+	soldati, err := m.Get(name)
+	if err != nil {
+		return err
+	}
+
+	// Check if already assigned
+	for _, t := range soldati.Turfs {
+		if t == turf {
+			return nil // Already assigned, no-op
+		}
+	}
+
+	// Add turf to list
+	soldati.Turfs = append(soldati.Turfs, turf)
+
+	// If this is the first turf, make it primary
+	if soldati.PrimaryTurf == "" {
+		soldati.PrimaryTurf = turf
+	}
+
+	return m.Update(soldati)
+}
+
+// UnassignTurf removes a turf assignment from a soldati
+func (m *Manager) UnassignTurf(name, turf string) error {
+	soldati, err := m.Get(name)
+	if err != nil {
+		return err
+	}
+
+	// Remove turf from list
+	newTurfs := make([]string, 0, len(soldati.Turfs))
+	for _, t := range soldati.Turfs {
+		if t != turf {
+			newTurfs = append(newTurfs, t)
+		}
+	}
+	soldati.Turfs = newTurfs
+
+	// Clear primary if it was the removed turf
+	if soldati.PrimaryTurf == turf {
+		if len(soldati.Turfs) > 0 {
+			soldati.PrimaryTurf = soldati.Turfs[0]
+		} else {
+			soldati.PrimaryTurf = ""
+		}
+	}
+
+	return m.Update(soldati)
+}
+
+// SetPrimaryTurf sets the primary turf for a soldati
+func (m *Manager) SetPrimaryTurf(name, turf string) error {
+	soldati, err := m.Get(name)
+	if err != nil {
+		return err
+	}
+
+	// Verify turf is assigned
+	found := false
+	for _, t := range soldati.Turfs {
+		if t == turf {
+			found = true
+			break
+		}
+	}
+
+	if !found && turf != "" {
+		return fmt.Errorf("turf %q is not assigned to soldati %q", turf, name)
+	}
+
+	soldati.PrimaryTurf = turf
+	return m.Update(soldati)
+}
+
+// ListByTurf returns all soldati assigned to a specific turf (or all turfs if empty)
+func (m *Manager) ListByTurf(turf string) ([]*models.Soldati, error) {
+	all, err := m.List()
+	if err != nil {
+		return nil, err
+	}
+
+	if turf == "" {
+		return all, nil
+	}
+
+	result := make([]*models.Soldati, 0)
+	for _, s := range all {
+		// Empty turfs list means assigned to all turfs
+		if len(s.Turfs) == 0 {
+			result = append(result, s)
+			continue
+		}
+
+		// Check if turf is in the list
+		for _, t := range s.Turfs {
+			if t == turf {
+				result = append(result, s)
+				break
+			}
+		}
+	}
+
+	return result, nil
+}
+
 // listNames returns the names of all stored soldati
 func (m *Manager) listNames() ([]string, error) {
 	entries, err := os.ReadDir(m.dir)
