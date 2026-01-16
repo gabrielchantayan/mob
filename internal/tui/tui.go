@@ -97,6 +97,9 @@ type streamDoneMsg struct {
 	err      error
 }
 
+// sidebarTickMsg triggers periodic sidebar data refresh
+type sidebarTickMsg time.Time
+
 // streamState holds the streaming state
 type streamState struct {
 	blockChan    chan agent.ChatContentBlock
@@ -330,13 +333,22 @@ func (m *Model) loadData() {
 }
 
 func (m Model) Init() tea.Cmd {
-	return nil
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+		return sidebarTickMsg(t)
+	})
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case sidebarTickMsg:
+		// Refresh sidebar data periodically
+		m.loadData()
+		return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return sidebarTickMsg(t)
+		})
+
 	case chatResponseMsg:
 		m.chatWaiting = false
 		if msg.err != nil {
