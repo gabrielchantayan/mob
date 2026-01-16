@@ -65,6 +65,23 @@ func (s *BeadStore) Create(bead *models.Bead) (*models.Bead, error) {
 	bead.UpdatedAt = time.Now()
 	bead.Branch = "mob/" + bead.ID
 
+	// Add creation event to history
+	createdEvent := models.BeadEvent{
+		Type:      models.BeadEventTypeCreated,
+		Actor:     bead.CreatedBy,
+		Timestamp: bead.CreatedAt,
+	}
+	eventID, err := generateID()
+	if err == nil {
+		createdEvent.ID = eventID
+	}
+
+	if createdEvent.Actor == "" {
+		createdEvent.Actor = "user"
+	}
+
+	bead.History = []models.BeadEvent{createdEvent}
+
 	return bead, s.appendBead(bead)
 }
 
@@ -170,6 +187,64 @@ func (s *BeadStore) Get(id string) (*models.Bead, error) {
 	return nil, fmt.Errorf("bead not found: %s", id)
 }
 
+// AddEvent adds a historical event to a bead
+func (s *BeadStore) AddEvent(beadID string, event models.BeadEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	beads, err := s.readAllBeads()
+	if err != nil {
+		return err
+	}
+
+	found := false
+	for i, b := range beads {
+		if b.ID == beadID {
+			// Generate event ID if not provided
+			if event.ID == "" {
+				eventID, err := generateID()
+				if err != nil {
+					return fmt.Errorf("failed to generate event ID: %w", err)
+				}
+				event.ID = eventID
+			}
+
+			// Set timestamp if not provided
+			if event.Timestamp.IsZero() {
+				event.Timestamp = time.Now()
+			}
+
+			// Initialize history slice if nil
+			if b.History == nil {
+				b.History = []models.BeadEvent{}
+			}
+
+			// Add event to history
+			b.History = append(b.History, event)
+			b.UpdatedAt = time.Now()
+			beads[i] = b
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("bead not found: %s", beadID)
+	}
+
+	return s.writeAllBeads(beads)
+}
+
+// AddComment adds a comment event to a bead's history
+func (s *BeadStore) AddComment(beadID, actor, comment string) error {
+	event := models.BeadEvent{
+		Type:    models.BeadEventTypeComment,
+		Actor:   actor,
+		Comment: comment,
+	}
+	return s.AddEvent(beadID, event)
+}
+
 // Update modifies an existing bead
 func (s *BeadStore) Update(bead *models.Bead) (*models.Bead, error) {
 	s.mu.Lock()
@@ -181,9 +256,45 @@ func (s *BeadStore) Update(bead *models.Bead) (*models.Bead, error) {
 	}
 
 	found := false
+	var oldBead *models.Bead
 	for i, b := range beads {
 		if b.ID == bead.ID {
+			oldBead = b
 			bead.UpdatedAt = time.Now()
+
+			// Auto-record status changes
+			if oldBead.Status != bead.Status {
+				event := models.BeadEvent{
+					Type:      models.BeadEventTypeStatusChange,
+					Actor:     "system",
+					From:      string(oldBead.Status),
+					To:        string(bead.Status),
+					Timestamp: time.Now(),
+				}
+
+				// Generate event ID
+				eventID, err := generateID()
+				if err == nil {
+					event.ID = eventID
+				}
+
+				// Initialize history if needed
+				if bead.History == nil {
+					bead.History = oldBead.History
+				}
+				if bead.History == nil {
+					bead.History = []models.BeadEvent{}
+				}
+
+				// Add the status change event
+				bead.History = append(bead.History, event)
+			} else {
+				// Preserve existing history if no status change
+				if bead.History == nil {
+					bead.History = oldBead.History
+				}
+			}
+
 			beads[i] = bead
 			found = true
 			break

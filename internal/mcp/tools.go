@@ -377,6 +377,29 @@ func GetTools() []*Tool {
 			Handler: handleCompleteBead,
 		},
 		{
+			Name:        "comment_on_bead",
+			Description: "Leave a comment on a bead. Agents can report what they did, blockers found, questions, or progress updates.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"bead_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Bead ID to comment on",
+					},
+					"comment": map[string]interface{}{
+						"type":        "string",
+						"description": "The comment text",
+					},
+					"actor": map[string]interface{}{
+						"type":        "string",
+						"description": "Who is making the comment (agent name, user, etc.)",
+					},
+				},
+				"required": []string{"bead_id", "comment"},
+			},
+			Handler: handleCommentOnBead,
+		},
+		{
 			Name:        "list_turfs",
 			Description: "Get the turf mappings. Returns all registered turfs with their paths so you know where projects are located.",
 			InputSchema: map[string]interface{}{
@@ -1277,6 +1300,35 @@ func GenerateMCPConfig(mobDir string) (string, error) {
 	}
 
 	return configPath, nil
+}
+
+func handleCommentOnBead(ctx *ToolContext, args map[string]interface{}) (string, error) {
+	beadID, _ := args["bead_id"].(string)
+	comment, _ := args["comment"].(string)
+	actor, _ := args["actor"].(string)
+
+	if beadID == "" {
+		return "", fmt.Errorf("bead_id is required")
+	}
+	if comment == "" {
+		return "", fmt.Errorf("comment is required")
+	}
+
+	if ctx.BeadStore == nil {
+		return "", fmt.Errorf("bead store not available")
+	}
+
+	// Default actor to "user" if not specified
+	if actor == "" {
+		actor = "user"
+	}
+
+	// Add the comment to the bead's history
+	if err := ctx.BeadStore.AddComment(beadID, actor, comment); err != nil {
+		return "", fmt.Errorf("failed to add comment: %w", err)
+	}
+
+	return fmt.Sprintf("Comment added to bead %s by %s", beadID, actor), nil
 }
 
 func handleListTurfs(ctx *ToolContext, args map[string]interface{}) (string, error) {
