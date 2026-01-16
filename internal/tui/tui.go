@@ -38,6 +38,8 @@ var tabNames = []string{"Chat", "Logs", "Agents"}
 const (
 	sidebarWidthConst  = 42  // Fixed sidebar width
 	minWidthForSidebar = 120 // Below this, hide sidebar
+	minInputHeight     = 1   // Minimum textarea height (single line)
+	maxInputHeight     = 10  // Maximum textarea height before scrolling
 )
 
 // SoldatiStatus for sidebar display
@@ -153,7 +155,7 @@ func New() Model {
 	ti.Placeholder = "Type a message... (Alt+Enter for newline)"
 	ti.CharLimit = 10000
 	ti.SetWidth(80)
-	ti.SetHeight(3)
+	ti.SetHeight(minInputHeight) // Start small, grows dynamically
 	ti.ShowLineNumbers = false
 	ti.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+enter")
 
@@ -214,8 +216,31 @@ func (m *Model) updateLayout() {
 	m.chatViewport.Width = mainWidth - 4
 	m.chatViewport.Height = m.height - 12
 
-	// Update input width
+	// Update input width and height
 	m.chatInput.SetWidth(mainWidth - 8)
+	m.updateInputHeight()
+}
+
+// updateInputHeight adjusts textarea height based on content lines
+func (m *Model) updateInputHeight() {
+	content := m.chatInput.Value()
+
+	// Count lines in the content
+	lines := 1
+	if content != "" {
+		lines = strings.Count(content, "\n") + 1
+	}
+
+	// Clamp to min/max bounds
+	height := lines
+	if height < minInputHeight {
+		height = minInputHeight
+	}
+	if height > maxInputHeight {
+		height = maxInputHeight
+	}
+
+	m.chatInput.SetHeight(height)
 }
 
 // loadData fetches current state from the various managers
@@ -344,6 +369,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				normalized := strings.ReplaceAll(string(msg.Runes), "\r\n", "\n")
 				normalized = strings.ReplaceAll(normalized, "\r", "\n")
 				m.chatInput.InsertString(normalized)
+				// Dynamically adjust height for pasted content
+				m.updateInputHeight()
 				return m, nil
 			}
 
@@ -382,6 +409,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Update text input
 			var cmd tea.Cmd
 			m.chatInput, cmd = m.chatInput.Update(msg)
+			// Dynamically adjust height based on content
+			m.updateInputHeight()
 			return m, cmd
 		}
 
@@ -528,6 +557,7 @@ func (m *Model) sendMessage() tea.Cmd {
 	// Check for quit commands first
 	if isQuitCommand(trimmed) {
 		m.chatInput.Reset()
+		m.updateInputHeight()
 		m.quitting = true
 		return tea.Quit
 	}
@@ -538,6 +568,7 @@ func (m *Model) sendMessage() tea.Cmd {
 	}
 
 	m.chatInput.Reset()
+	m.updateInputHeight()
 
 	// Add user message to history
 	m.chatMessages = append(m.chatMessages, ChatMessage{
@@ -578,6 +609,7 @@ func (m *Model) sendMessage() tea.Cmd {
 // handleSlashCommand processes slash commands like /new
 func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 	m.chatInput.Reset()
+	m.updateInputHeight()
 
 	// Parse the command (remove leading slash, get first word)
 	parts := strings.Fields(strings.TrimPrefix(cmd, "/"))
