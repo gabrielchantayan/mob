@@ -9,6 +9,7 @@ import (
 	"github.com/gabe/mob/internal/mcp"
 	"github.com/gabe/mob/internal/registry"
 	"github.com/gabe/mob/internal/storage"
+	"github.com/gabe/mob/internal/turf"
 	"github.com/spf13/cobra"
 )
 
@@ -52,8 +53,16 @@ var mcpServerCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		// Create turf manager
+		turfsFile := filepath.Join(mobDir, "turfs.toml")
+		turfMgr, err := turf.NewManager(turfsFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not load turf manager: %v\n", err)
+			// Continue without turf manager - worktree features will be disabled
+		}
+
 		// Create and run MCP server
-		server := mcp.NewServer(reg, spawner, beadStore, mobDir)
+		server := mcp.NewServer(reg, spawner, beadStore, turfMgr, mobDir)
 		if err := server.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "MCP server error: %v\n", err)
 			os.Exit(1)

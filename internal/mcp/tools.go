@@ -11,20 +11,24 @@ import (
 	"time"
 
 	"github.com/gabe/mob/internal/agent"
+	"github.com/gabe/mob/internal/git"
 	"github.com/gabe/mob/internal/hook"
+	"github.com/gabe/mob/internal/merge"
 	"github.com/gabe/mob/internal/models"
 	"github.com/gabe/mob/internal/registry"
 	"github.com/gabe/mob/internal/soldati"
 	"github.com/gabe/mob/internal/storage"
+	"github.com/gabe/mob/internal/turf"
 )
 
 // ToolContext provides access to mob systems for tool handlers
 type ToolContext struct {
-	Registry  *registry.Registry
-	Spawner   *agent.Spawner
-	BeadStore *storage.BeadStore
-	MobDir    string
-	TaskWg    *sync.WaitGroup // Track background tasks for graceful shutdown
+	Registry    *registry.Registry
+	Spawner     *agent.Spawner
+	BeadStore   *storage.BeadStore
+	TurfManager *turf.Manager
+	MobDir      string
+	TaskWg      *sync.WaitGroup // Track background tasks for graceful shutdown
 }
 
 // ToolHandler is a function that executes a tool
@@ -667,6 +671,7 @@ func handleAssignBead(ctx *ToolContext, args map[string]interface{}) (string, er
 
 	// Determine task description
 	taskDesc := description
+	var worktreePath string
 	if beadID != "" {
 		taskDesc = fmt.Sprintf("bead:%s", beadID)
 
@@ -684,6 +689,35 @@ func handleAssignBead(ctx *ToolContext, args map[string]interface{}) (string, er
 			}
 			bead.Assignee = assigneeName
 			bead.Status = models.BeadStatusInProgress
+
+			// Create worktree for this bead if turf is set
+			if bead.Turf != "" && ctx.TurfManager != nil {
+				turfInfo, err := ctx.TurfManager.Get(bead.Turf)
+				if err == nil {
+					// Create worktree manager for this turf's repo
+					wtMgr, err := git.NewWorktreeManager(turfInfo.Path)
+					if err == nil {
+						// Try to create worktree (may already exist)
+						wt, err := wtMgr.Create(beadID)
+						if err == nil {
+							worktreePath = wt.Path
+							bead.WorktreePath = worktreePath
+							log.Printf("Created worktree for bead %s at %s", beadID, worktreePath)
+						} else if err == git.ErrWorktreeExists {
+							// Worktree already exists, get its path
+							wt, _ := wtMgr.Get(beadID)
+							if wt != nil {
+								worktreePath = wt.Path
+								bead.WorktreePath = worktreePath
+							}
+						} else {
+							log.Printf("Warning: failed to create worktree for bead %s: %v", beadID, err)
+						}
+					} else {
+						log.Printf("Warning: failed to create worktree manager for turf %s: %v", bead.Turf, err)
+					}
+				}
+			}
 
 			if _, err := ctx.BeadStore.Update(bead); err != nil {
 				return "", fmt.Errorf("failed to update bead: %w", err)
@@ -722,7 +756,11 @@ func handleAssignBead(ctx *ToolContext, args map[string]interface{}) (string, er
 	if displayName == "" {
 		displayName = agentRecord.ID
 	}
-	return fmt.Sprintf("Assigned work to '%s': %s", displayName, truncate(taskDesc, 50)), nil
+	result := fmt.Sprintf("Assigned work to '%s': %s", displayName, truncate(taskDesc, 50))
+	if worktreePath != "" {
+		result += fmt.Sprintf("\nWorktree: %s", worktreePath)
+	}
+	return result, nil
 }
 
 func handleCreateBead(ctx *ToolContext, args map[string]interface{}) (string, error) {
@@ -975,6 +1013,50 @@ func handleCompleteBead(ctx *ToolContext, args map[string]interface{}) (string, 
 		return "", fmt.Errorf("bead not found: %w", err)
 	}
 
+	var mergeResult *merge.MergeResult
+	var mergeErr error
+
+	// If bead has a worktree and turf, attempt to merge the work
+	if bead.WorktreePath != "" && bead.Turf != "" && ctx.TurfManager != nil {
+		turfInfo, err := ctx.TurfManager.Get(bead.Turf)
+		if err == nil {
+			// Create merge queue for this repo
+			mq := merge.New(turfInfo.Path)
+
+			// Add the bead to merge queue
+			if err := mq.Add(bead.ID, bead.Branch, bead.Turf, bead.Blocks); err != nil && err != merge.ErrItemExists {
+				log.Printf("Warning: failed to add bead %s to merge queue: %v", bead.ID, err)
+			}
+
+			// Process the merge
+			mergeResult, mergeErr = mq.Process()
+			if mergeErr != nil {
+				log.Printf("Warning: merge processing error for bead %s: %v", bead.ID, mergeErr)
+			}
+
+			// If merge succeeded, clean up the worktree
+			if mergeResult != nil && mergeResult.Success {
+				wtMgr, err := git.NewWorktreeManager(turfInfo.Path)
+				if err == nil {
+					if err := wtMgr.Remove(bead.ID, true); err != nil {
+						log.Printf("Warning: failed to remove worktree for bead %s: %v", bead.ID, err)
+					} else {
+						log.Printf("Removed worktree and branch for bead %s", bead.ID)
+						bead.WorktreePath = "" // Clear the path since worktree is gone
+					}
+				}
+			} else if mergeResult != nil && !mergeResult.Success {
+				// Merge failed - mark bead as blocked instead of closed
+				bead.Status = models.BeadStatusBlocked
+				bead.CloseReason = fmt.Sprintf("merge failed: %s", mergeResult.Message)
+				if _, err := ctx.BeadStore.Update(bead); err != nil {
+					return "", fmt.Errorf("failed to update bead: %w", err)
+				}
+				return fmt.Sprintf("Job '%s' merge failed: %s. Bead marked as blocked.", bead.Title, mergeResult.Message), nil
+			}
+		}
+	}
+
 	// Mark as completed
 	bead.Status = models.BeadStatusClosed
 	now := time.Now()
@@ -991,7 +1073,11 @@ func handleCompleteBead(ctx *ToolContext, args map[string]interface{}) (string, 
 		return "", fmt.Errorf("failed to complete bead: %w", err)
 	}
 
-	return fmt.Sprintf("Job '%s' is done. Closed at %s.", bead.Title, now.Format(time.RFC3339)), nil
+	result := fmt.Sprintf("Job '%s' is done. Closed at %s.", bead.Title, now.Format(time.RFC3339))
+	if mergeResult != nil && mergeResult.Success {
+		result += fmt.Sprintf(" Branch merged: %s", mergeResult.Message)
+	}
+	return result, nil
 }
 
 // GenerateMCPConfig creates an MCP config file for Claude

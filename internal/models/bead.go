@@ -38,6 +38,7 @@ type Bead struct {
 	Labels         string     `json:"labels,omitempty"`
 	Turf           string     `json:"turf"`
 	Branch         string     `json:"branch,omitempty"`
+	WorktreePath   string     `json:"worktree_path,omitempty"` // Path to git worktree for this bead
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 	ClosedAt       *time.Time `json:"closed_at,omitempty"`
