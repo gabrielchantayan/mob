@@ -29,12 +29,12 @@ type tab int
 
 const (
 	tabChat tab = iota
-	tabLogs
+	tabDaemon
 	tabAgents
 )
 
 // Tab names for display
-var tabNames = []string{"Chat", "Logs", "Agents"}
+var tabNames = []string{"Chat", "Daemon", "Agents"}
 
 // Layout constants
 const (
@@ -148,6 +148,11 @@ type Model struct {
 
 	// Agent records from registry
 	agentRecords []*registry.AgentRecord
+
+	// Daemon log state
+	daemonLogViewport viewport.Model
+	daemonLogLines    []string
+	daemonLogFile     string
 }
 
 // New creates a new TUI model
@@ -175,6 +180,9 @@ func New() Model {
 	// Initialize viewport for chat history
 	vp := viewport.New(80, 10)
 
+	// Initialize viewport for daemon logs
+	daemonVp := viewport.New(80, 10)
+
 	// Initialize underboss
 	spawner := agent.NewSpawner()
 	ub := underboss.New(mobDir, spawner)
@@ -183,17 +191,20 @@ func New() Model {
 	ti.Focus()
 
 	m := Model{
-		activeTab:        tabChat, // Chat-first
-		sidebarVisible:   true,
-		sidebarWidth:     sidebarWidthConst,
-		sessionStartTime: time.Now(),
-		daemonStatus:     "unknown",
-		chatInput:        ti,
-		chatViewport:     vp,
-		chatMessages:     []ChatMessage{},
-		currentBlocks:    []agent.ChatContentBlock{},
-		underboss:        ub,
-		mobDir:           mobDir,
+		activeTab:         tabChat, // Chat-first
+		sidebarVisible:    true,
+		sidebarWidth:      sidebarWidthConst,
+		sessionStartTime:  time.Now(),
+		daemonStatus:      "unknown",
+		chatInput:         ti,
+		chatViewport:      vp,
+		chatMessages:      []ChatMessage{},
+		currentBlocks:     []agent.ChatContentBlock{},
+		underboss:         ub,
+		mobDir:            mobDir,
+		daemonLogViewport: daemonVp,
+		daemonLogLines:    []string{},
+		daemonLogFile:     filepath.Join(mobDir, ".mob", "daemon.log"),
 	}
 	m.loadData()
 	return m
@@ -234,6 +245,14 @@ func (m *Model) updateLayout() {
 	// Update viewport dimensions
 	m.chatViewport.Width = mainWidth - 4
 	m.chatViewport.Height = viewportHeight
+
+	// Update daemon log viewport dimensions (simpler - no input area)
+	daemonViewportHeight := m.height - 10 // tabs, borders, help, padding
+	if daemonViewportHeight < 5 {
+		daemonViewportHeight = 5
+	}
+	m.daemonLogViewport.Width = mainWidth - 4
+	m.daemonLogViewport.Height = daemonViewportHeight
 }
 
 // updateInputHeight adjusts textarea height based on content lines
@@ -332,6 +351,9 @@ func (m *Model) loadData() {
 	if err == nil {
 		m.agentRecords = agents
 	}
+
+	// Load daemon logs (tail last 500 lines)
+	m.loadDaemonLogs()
 }
 
 func (m Model) Init() tea.Cmd {
@@ -465,7 +487,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activeTab = tabChat
 			m.updateFocus()
 		case "2":
-			m.activeTab = tabLogs
+			m.activeTab = tabDaemon
 			m.updateFocus()
 		case "3":
 			m.activeTab = tabAgents
@@ -483,45 +505,69 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		// Vim-style scroll keybindings when input is not focused
 		case "j":
-			if m.activeTab == tabChat {
+			switch m.activeTab {
+			case tabChat:
 				m.chatViewport.LineDown(1)
-				return m, nil
+			case tabDaemon:
+				m.daemonLogViewport.LineDown(1)
 			}
+			return m, nil
 		case "k":
-			if m.activeTab == tabChat {
+			switch m.activeTab {
+			case tabChat:
 				m.chatViewport.LineUp(1)
-				return m, nil
+			case tabDaemon:
+				m.daemonLogViewport.LineUp(1)
 			}
+			return m, nil
 		case "ctrl+d":
-			if m.activeTab == tabChat {
+			switch m.activeTab {
+			case tabChat:
 				m.chatViewport.HalfViewDown()
-				return m, nil
+			case tabDaemon:
+				m.daemonLogViewport.HalfViewDown()
 			}
+			return m, nil
 		case "ctrl+u":
-			if m.activeTab == tabChat {
+			switch m.activeTab {
+			case tabChat:
 				m.chatViewport.HalfViewUp()
-				return m, nil
+			case tabDaemon:
+				m.daemonLogViewport.HalfViewUp()
 			}
+			return m, nil
 		case "ctrl+f":
-			if m.activeTab == tabChat {
+			switch m.activeTab {
+			case tabChat:
 				m.chatViewport.ViewDown()
-				return m, nil
+			case tabDaemon:
+				m.daemonLogViewport.ViewDown()
 			}
+			return m, nil
 		case "ctrl+b":
-			if m.activeTab == tabChat {
+			switch m.activeTab {
+			case tabChat:
 				m.chatViewport.ViewUp()
-				return m, nil
+			case tabDaemon:
+				m.daemonLogViewport.ViewUp()
 			}
+			return m, nil
 		case "g":
-			if m.activeTab == tabChat {
+			switch m.activeTab {
+			case tabChat:
 				m.chatViewport.GotoTop()
-				return m, nil
+			case tabDaemon:
+				m.daemonLogViewport.GotoTop()
 			}
+			return m, nil
 		case "G":
-			if m.activeTab == tabChat {
+			switch m.activeTab {
+			case tabChat:
 				m.chatViewport.GotoBottom()
-				return m, nil
+			case tabDaemon:
+				m.daemonLogViewport.GotoBottom()
 			}
+			return m, nil
 		}
 
 	case tea.WindowSizeMsg:
@@ -529,19 +575,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.updateLayout()
 		m.updateChatViewport()
+		m.updateDaemonViewport()
 
 	case tea.MouseMsg:
-		// Handle mouse wheel scrolling in chat viewport
-		if m.activeTab == tabChat {
+		// Handle mouse wheel scrolling in viewports
+		switch m.activeTab {
+		case tabChat:
 			var cmd tea.Cmd
 			m.chatViewport, cmd = m.chatViewport.Update(msg)
+			cmds = append(cmds, cmd)
+		case tabDaemon:
+			var cmd tea.Cmd
+			m.daemonLogViewport, cmd = m.daemonLogViewport.Update(msg)
 			cmds = append(cmds, cmd)
 		}
 	}
 
-	// Update viewport for scrolling
+	// Update viewports for scrolling
 	var cmd tea.Cmd
-	m.chatViewport, cmd = m.chatViewport.Update(msg)
+	switch m.activeTab {
+	case tabChat:
+		m.chatViewport, cmd = m.chatViewport.Update(msg)
+	case tabDaemon:
+		m.daemonLogViewport, cmd = m.daemonLogViewport.Update(msg)
+	}
 	cmds = append(cmds, cmd)
 
 	return m, tea.Batch(cmds...)
@@ -749,8 +806,8 @@ func (m Model) renderMainArea(width int) string {
 	switch m.activeTab {
 	case tabChat:
 		b.WriteString(m.renderChat())
-	case tabLogs:
-		b.WriteString(m.renderLogs())
+	case tabDaemon:
+		b.WriteString(m.renderDaemon())
 	case tabAgents:
 		b.WriteString(m.renderAgents())
 	}
@@ -924,8 +981,117 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
-func (m Model) renderLogs() string {
-	return mutedStyle.Render("No logs yet")
+// loadDaemonLogs reads the daemon log file and updates the viewport
+func (m *Model) loadDaemonLogs() {
+	content, err := os.ReadFile(m.daemonLogFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			m.daemonLogLines = []string{}
+		}
+		return
+	}
+
+	lines := strings.Split(string(content), "\n")
+
+	// Keep last 500 lines to avoid memory issues
+	maxLines := 500
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+
+	m.daemonLogLines = lines
+	m.updateDaemonViewport()
+}
+
+// updateDaemonViewport refreshes the daemon log viewport content
+func (m *Model) updateDaemonViewport() {
+	if len(m.daemonLogLines) == 0 {
+		m.daemonLogViewport.SetContent(mutedStyle.Render("No daemon logs yet. Start the daemon with: mob daemon start"))
+		return
+	}
+
+	var b strings.Builder
+	width := m.daemonLogViewport.Width - 4
+	if width < 40 {
+		width = 80
+	}
+
+	for _, line := range m.daemonLogLines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		// Style log lines - highlight important events
+		styledLine := m.styleDaemonLogLine(line, width)
+		b.WriteString(styledLine)
+		b.WriteString("\n")
+	}
+
+	m.daemonLogViewport.SetContent(b.String())
+	m.daemonLogViewport.GotoBottom()
+}
+
+// styleDaemonLogLine applies styling to a single daemon log line
+func (m Model) styleDaemonLogLine(line string, width int) string {
+	// Log format: "2024/01/16 12:34:56 Message here"
+	// Extract timestamp and message
+	if len(line) < 20 {
+		return mutedStyle.Render(line)
+	}
+
+	// Detect log type by keywords and style accordingly
+	lower := strings.ToLower(line)
+
+	var msgStyle lipgloss.Style
+	switch {
+	case strings.Contains(lower, "error"):
+		msgStyle = baseStyle.Foreground(errorColor)
+	case strings.Contains(lower, "warning"):
+		msgStyle = baseStyle.Foreground(warningColor)
+	case strings.Contains(lower, "started") || strings.Contains(lower, "spawning") || strings.Contains(lower, "active"):
+		msgStyle = baseStyle.Foreground(successColor)
+	case strings.Contains(lower, "stopped") || strings.Contains(lower, "shutdown") || strings.Contains(lower, "killing"):
+		msgStyle = baseStyle.Foreground(warningColor)
+	case strings.Contains(lower, "hook:") || strings.Contains(lower, "assignment"):
+		msgStyle = baseStyle.Foreground(secondaryColor)
+	case strings.Contains(lower, "patrol:"):
+		msgStyle = baseStyle.Foreground(textMutedColor)
+	default:
+		msgStyle = baseStyle.Foreground(textColor)
+	}
+
+	// Try to extract timestamp (first 19 chars typically "2024/01/16 12:34:56")
+	if len(line) >= 20 && line[4] == '/' && line[7] == '/' {
+		timestamp := line[:19]
+		message := line[20:]
+
+		timestampStyled := mutedStyle.Render(timestamp)
+		messageStyled := msgStyle.Render(message)
+
+		return timestampStyled + " " + messageStyled
+	}
+
+	return msgStyle.Render(line)
+}
+
+func (m Model) renderDaemon() string {
+	var b strings.Builder
+
+	// Status header
+	var statusText string
+	if m.daemonStatus == "running" {
+		statusText = statusStyle.Render(fmt.Sprintf("● Daemon running (PID %d)", m.daemonPID))
+	} else {
+		statusText = statusInactiveStyle.Render("○ Daemon not running")
+	}
+	b.WriteString(statusText)
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render(strings.Repeat("─", m.daemonLogViewport.Width)))
+	b.WriteString("\n")
+
+	// Log viewport
+	b.WriteString(m.daemonLogViewport.View())
+
+	return b.String()
 }
 
 func (m Model) renderAgents() string {
@@ -1376,7 +1542,8 @@ func (m Model) renderHelp() string {
 		desc string
 	}{":q", "quit"})
 
-	if m.activeTab == tabChat {
+	switch m.activeTab {
+	case tabChat:
 		if m.chatInput.Focused() {
 			items = []struct {
 				key  string
@@ -1400,6 +1567,14 @@ func (m Model) renderHelp() string {
 				desc string
 			}{"g/G", "top/btm"})
 		}
+	case tabDaemon:
+		items = append(items, struct {
+			key  string
+			desc string
+		}{"j/k", "scroll"}, struct {
+			key  string
+			desc string
+		}{"g/G", "top/btm"})
 	}
 
 	var parts []string

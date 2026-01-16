@@ -30,9 +30,23 @@ var daemonStartCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		var out io.Writer = io.Discard
+		// Always log to daemon.log file for TUI viewing
+		logDir := filepath.Join(mobDir, ".mob")
+		if err := os.MkdirAll(logDir, 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating log directory: %v\n", err)
+			os.Exit(1)
+		}
+		logFile, err := os.OpenFile(filepath.Join(logDir, "daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error opening log file: %v\n", err)
+			os.Exit(1)
+		}
+		defer logFile.Close()
+
+		var out io.Writer = logFile
 		if debug {
-			out = os.Stdout
+			// In debug mode, write to both stdout and log file
+			out = io.MultiWriter(os.Stdout, logFile)
 		}
 		logger := log.New(out, "", log.LstdFlags)
 
