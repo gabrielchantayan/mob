@@ -17,15 +17,16 @@ var (
 
 // AgentRecord represents a tracked agent in the registry
 type AgentRecord struct {
-	ID        string    `json:"id"`
-	Type      string    `json:"type"` // underboss, soldati, associate
-	Name      string    `json:"name"`
-	Turf      string    `json:"turf"`
-	SessionID string    `json:"session_id,omitempty"`
-	Status    string    `json:"status"` // active, idle, stuck, dead
-	Task      string    `json:"task,omitempty"`
-	StartedAt time.Time `json:"started_at"`
-	LastPing  time.Time `json:"last_ping"`
+	ID          string     `json:"id"`
+	Type        string     `json:"type"` // underboss, soldati, associate
+	Name        string     `json:"name"`
+	Turf        string     `json:"turf"`
+	SessionID   string     `json:"session_id,omitempty"`
+	Status      string     `json:"status"` // active, idle, stuck, dead, completed, failed, timed_out
+	Task        string     `json:"task,omitempty"`
+	StartedAt   time.Time  `json:"started_at"`
+	LastPing    time.Time  `json:"last_ping"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"` // When associate finished (for cleanup TTL)
 }
 
 // Registry manages persistent agent state shared across processes
@@ -264,6 +265,11 @@ func (r *Registry) ListByType(agentType string) ([]*AgentRecord, error) {
 	return result, err
 }
 
+// isTerminalStatus returns true if the status indicates the agent has finished
+func isTerminalStatus(status string) bool {
+	return status == "completed" || status == "failed" || status == "timed_out"
+}
+
 // UpdateStatus updates an agent's status
 func (r *Registry) UpdateStatus(id, status string) error {
 	r.mu.Lock()
@@ -282,6 +288,13 @@ func (r *Registry) UpdateStatus(id, status string) error {
 
 		agent.Status = status
 		agent.LastPing = time.Now()
+
+		// Set CompletedAt when transitioning to a terminal status
+		if isTerminalStatus(status) && agent.CompletedAt == nil {
+			now := time.Now()
+			agent.CompletedAt = &now
+		}
+
 		return r.save(data)
 	})
 }

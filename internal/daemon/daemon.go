@@ -188,6 +188,9 @@ func (d *Daemon) patrol() {
 		return
 	}
 
+	// Clean up stale associates first
+	d.cleanupStaleAssociates()
+
 	// Get all registered soldati from TOML files
 	registeredSoldati, err := d.soldatiMgr.List()
 	if err != nil {
@@ -245,6 +248,52 @@ func (d *Daemon) patrol() {
 			fmt.Printf("Patrol: removing stale registry entry for '%s'\n", name)
 			d.registry.Unregister(record.ID)
 			delete(d.activeAgents, name)
+		}
+	}
+}
+
+// AssociateCleanupTTL is how long after completion before an associate is removed from registry
+const AssociateCleanupTTL = 5 * time.Minute
+
+// cleanupStaleAssociates removes associates that have been in a terminal state for too long.
+// This catches cases where the self-cleanup in handleSpawnAssociate failed.
+func (d *Daemon) cleanupStaleAssociates() {
+	if d.registry == nil {
+		return
+	}
+
+	// Get all associates from registry
+	associates, err := d.registry.ListByType("associate")
+	if err != nil {
+		fmt.Printf("Patrol: failed to list associates for cleanup: %v\n", err)
+		return
+	}
+
+	now := time.Now()
+
+	for _, assoc := range associates {
+		// Only clean up terminal states
+		if assoc.Status != "completed" && assoc.Status != "failed" && assoc.Status != "timed_out" {
+			continue
+		}
+
+		// Check if cleanup TTL has expired
+		var completedTime time.Time
+		if assoc.CompletedAt != nil {
+			completedTime = *assoc.CompletedAt
+		} else {
+			// Fallback to LastPing if CompletedAt not set (shouldn't happen but be safe)
+			completedTime = assoc.LastPing
+		}
+
+		timeSinceCompletion := now.Sub(completedTime)
+		if timeSinceCompletion > AssociateCleanupTTL {
+			fmt.Printf("Patrol: cleaning up stale associate '%s' (completed %v ago)\n",
+				assoc.ID, timeSinceCompletion.Round(time.Second))
+
+			if err := d.registry.Unregister(assoc.ID); err != nil {
+				fmt.Printf("Patrol: failed to unregister stale associate '%s': %v\n", assoc.ID, err)
+			}
 		}
 	}
 }

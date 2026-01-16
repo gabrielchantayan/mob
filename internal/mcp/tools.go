@@ -480,13 +480,24 @@ func handleSpawnAssociate(ctx *ToolContext, args map[string]interface{}) (string
 		// Execute the task
 		_, err := a.Chat(taskDesc)
 
-		// Update status based on result
+		// Update status based on result (CompletedAt is set automatically by UpdateStatus)
 		if err != nil {
 			log.Printf("Associate %s failed: %v", agentID, err)
 			reg.UpdateStatus(agentID, "failed")
 		} else {
 			reg.UpdateStatus(agentID, "completed")
 		}
+
+		// Self-cleanup: unregister after a brief delay to allow status to be read
+		// The delay gives other processes a chance to see the final status
+		go func() {
+			time.Sleep(30 * time.Second)
+			if err := reg.Unregister(agentID); err != nil {
+				log.Printf("Associate %s self-cleanup failed: %v", agentID, err)
+			} else {
+				log.Printf("Associate %s self-cleaned from registry", agentID)
+			}
+		}()
 	}(spawnedAgent, spawnedAgent.ID, task, ctx.Registry)
 
 	return fmt.Sprintf("Associate spawned and working. ID: %s, Task: %s", spawnedAgent.ID, truncate(task, 50)), nil
