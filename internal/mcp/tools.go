@@ -23,12 +23,18 @@ import (
 
 // ToolContext provides access to mob systems for tool handlers
 type ToolContext struct {
-	Registry    *registry.Registry
-	Spawner     *agent.Spawner
-	BeadStore   *storage.BeadStore
-	TurfManager *turf.Manager
-	MobDir      string
-	TaskWg      *sync.WaitGroup // Track background tasks for graceful shutdown
+	Registry       *registry.Registry
+	Spawner        *agent.Spawner
+	BeadStore      *storage.BeadStore
+	TurfManager    *turf.Manager
+	MobDir         string
+	TaskWg         *sync.WaitGroup // Track background tasks for graceful shutdown
+	NotifyManager  interface {
+		NotifyTaskComplete(beadID, title, assignee string) error
+		NotifyApprovalNeeded(beadID, title string) error
+		NotifyAgentStuck(agentName, agentID, task string) error
+		NotifyAgentError(agentName, agentID, errorMsg string) error
+	} // Optional notification manager
 }
 
 // ToolHandler is a function that executes a tool
@@ -685,7 +691,10 @@ func handleSpawnAssociate(ctx *ToolContext, args map[string]interface{}) (string
 
 	// Execute the task in a background goroutine
 	ctx.TaskWg.Add(1)
-	go func(a *agent.Agent, agentID string, taskDesc string, linkedBeadID string, reg *registry.Registry, beadStore *storage.BeadStore) {
+	go func(a *agent.Agent, agentID string, taskDesc string, linkedBeadID string, reg *registry.Registry, beadStore *storage.BeadStore, notifyMgr interface {
+		NotifyTaskComplete(beadID, title, assignee string) error
+		NotifyAgentError(agentName, agentID, errorMsg string) error
+	}) {
 		defer ctx.TaskWg.Done()
 
 		// Update status to working
@@ -698,6 +707,13 @@ func handleSpawnAssociate(ctx *ToolContext, args map[string]interface{}) (string
 		if err != nil {
 			log.Printf("Associate %s failed: %v", agentID, err)
 			reg.UpdateStatus(agentID, "failed")
+
+			// Send error notification
+			if notifyMgr != nil {
+				if notifyErr := notifyMgr.NotifyAgentError("Associate", agentID, err.Error()); notifyErr != nil {
+					log.Printf("Warning: failed to send error notification: %v", notifyErr)
+				}
+			}
 
 			// If linked to a bead, mark it as blocked
 			if linkedBeadID != "" && beadStore != nil {
@@ -720,10 +736,17 @@ func handleSpawnAssociate(ctx *ToolContext, args map[string]interface{}) (string
 					bead.CloseReason = fmt.Sprintf("completed by associate %s", agentID)
 					beadStore.Update(bead)
 					log.Printf("Bead %s auto-completed by associate %s", linkedBeadID, agentID)
+
+					// Send completion notification
+					if notifyMgr != nil {
+						if notifyErr := notifyMgr.NotifyTaskComplete(linkedBeadID, bead.Title, "Associate"); notifyErr != nil {
+							log.Printf("Warning: failed to send completion notification: %v", notifyErr)
+						}
+					}
 				}
 			}
 		}
-	}(spawnedAgent, spawnedAgent.ID, task, beadID, ctx.Registry, ctx.BeadStore)
+	}(spawnedAgent, spawnedAgent.ID, task, beadID, ctx.Registry, ctx.BeadStore, ctx.NotifyManager)
 
 	result := fmt.Sprintf("Associate spawned and working. ID: %s, Task: %s", spawnedAgent.ID, truncate(task, 50))
 	if beadID != "" {
@@ -1072,6 +1095,13 @@ func handleCreateBead(ctx *ToolContext, args map[string]interface{}) (string, er
 		return "", fmt.Errorf("failed to create bead: %w", err)
 	}
 
+	// Send notification if approval is needed
+	if createdBead.Status == models.BeadStatusPendingApproval && ctx.NotifyManager != nil {
+		if err := ctx.NotifyManager.NotifyApprovalNeeded(createdBead.ID, createdBead.Title); err != nil {
+			log.Printf("Warning: failed to send approval notification: %v", err)
+		}
+	}
+
 	// Format a nice response
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("New job on the board: %s\n\n", createdBead.ID))
@@ -1381,6 +1411,17 @@ func handleCompleteBead(ctx *ToolContext, args map[string]interface{}) (string, 
 	_, err = ctx.BeadStore.Update(bead)
 	if err != nil {
 		return "", fmt.Errorf("failed to complete bead: %w", err)
+	}
+
+	// Send notification about task completion
+	if ctx.NotifyManager != nil {
+		assignee := bead.Assignee
+		if assignee == "" {
+			assignee = "Unknown"
+		}
+		if err := ctx.NotifyManager.NotifyTaskComplete(bead.ID, bead.Title, assignee); err != nil {
+			log.Printf("Warning: failed to send completion notification: %v", err)
+		}
 	}
 
 	result := fmt.Sprintf("Job '%s' is done. Closed at %s.", bead.Title, now.Format(time.RFC3339))
