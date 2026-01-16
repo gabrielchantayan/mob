@@ -1241,6 +1241,8 @@ func (m Model) renderChat() string {
 	// Shared style for footer elements to match input box background
 	footerStyle := lipgloss.NewStyle().
 		Background(bgPanelColor).
+		PaddingTop(1).
+		PaddingBottom(1).
 		Padding(0, 1).
 		Width(inputWidth)
 
