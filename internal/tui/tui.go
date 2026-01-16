@@ -163,12 +163,12 @@ func New() Model {
 
 	// Initialize textarea for multiline input
 	ti := textarea.New()
-	ti.Placeholder = "Type a message... (Alt+Enter for newline)"
+	ti.Placeholder = "Type a message... (Ctrl+Enter to send)"
 	ti.CharLimit = 10000
 	ti.SetWidth(80)
 	ti.SetHeight(minInputHeight) // Start small, grows dynamically
 	ti.ShowLineNumbers = false
-	ti.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+enter")
+	ti.KeyMap.InsertNewline.SetKeys("enter") // Enter adds newline
 
 	// Set textarea styles to match the panel background
 	ti.FocusedStyle.Base = panelBaseStyle
@@ -443,7 +443,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc":
 				m.chatInput.Blur()
 				return m, nil
-			case "enter":
+			case "ctrl+enter":
+				// Ctrl+Enter sends the message
 				if !m.chatWaiting && strings.TrimSpace(m.chatInput.Value()) != "" {
 					return m, m.sendMessage()
 				}
@@ -1558,8 +1559,8 @@ func (m Model) renderHelp() string {
 				key  string
 				desc string
 			}{
-				{"enter", "send"},
-				{"alt+enter", "newline"},
+				{"enter", "newline"},
+				{"ctrl+enter", "send"},
 				{"ctrl+j/k", "scroll"},
 				{"ctrl+u/d", "½page"},
 				{"esc", "cancel"},
