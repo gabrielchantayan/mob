@@ -1,15 +1,59 @@
 package soldati
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/gabe/mob/internal/models"
 )
+
+// ErrInvalidName is returned when a soldati name contains invalid characters
+var ErrInvalidName = errors.New("invalid soldati name")
+
+// validNameRegex matches names that contain only alphanumeric characters, hyphens, and underscores
+var validNameRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`)
+
+// maxNameLength is the maximum allowed length for a soldati name
+const maxNameLength = 64
+
+// validateName checks if the given name is valid for a soldati.
+// Names must:
+// - Not be empty
+// - Not exceed 64 characters
+// - Start with alphanumeric and contain only alphanumeric, hyphen, underscore
+// - Not contain path traversal sequences
+func validateName(name string) error {
+	if name == "" {
+		return fmt.Errorf("%w: name cannot be empty", ErrInvalidName)
+	}
+
+	if len(name) > maxNameLength {
+		return fmt.Errorf("%w: name exceeds maximum length of %d characters", ErrInvalidName, maxNameLength)
+	}
+
+	// Check for path traversal attempts
+	if strings.Contains(name, "..") || strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		return fmt.Errorf("%w: name contains invalid path characters", ErrInvalidName)
+	}
+
+	// Check for names starting with dot (hidden files)
+	if strings.HasPrefix(name, ".") {
+		return fmt.Errorf("%w: name cannot start with a dot", ErrInvalidName)
+	}
+
+	// Validate against regex (alphanumeric, hyphen, underscore, starting with alphanumeric)
+	if !validNameRegex.MatchString(name) {
+		return fmt.Errorf("%w: name must start with alphanumeric and contain only alphanumeric characters, hyphens, and underscores", ErrInvalidName)
+	}
+
+	return nil
+}
 
 // Manager handles soldati storage operations
 type Manager struct {
@@ -35,9 +79,9 @@ func (m *Manager) Create(name string) (*models.Soldati, error) {
 		name = GenerateUniqueName(used)
 	}
 
-	// Check if name already exists
-	if _, err := m.Get(name); err == nil {
-		return nil, fmt.Errorf("soldati %q already exists", name)
+	// Validate the name (auto-generated names should always be valid, but validate anyway)
+	if err := validateName(name); err != nil {
+		return nil, err
 	}
 
 	now := time.Now()
@@ -48,7 +92,8 @@ func (m *Manager) Create(name string) (*models.Soldati, error) {
 		Stats:      models.SoldatiStats{},
 	}
 
-	if err := m.save(soldati); err != nil {
+	// Use atomic create to avoid race conditions (O_CREATE|O_EXCL fails if file exists)
+	if err := m.createNew(soldati); err != nil {
 		return nil, err
 	}
 
@@ -117,7 +162,32 @@ func (m *Manager) Delete(name string) error {
 	return nil
 }
 
-// save writes a soldati to its TOML file
+// createNew atomically creates a new soldati file, failing if it already exists.
+// This avoids TOCTOU race conditions by using O_CREATE|O_EXCL flags.
+func (m *Manager) createNew(soldati *models.Soldati) error {
+	filePath := filepath.Join(m.dir, soldati.Name+".toml")
+
+	// O_CREATE|O_EXCL ensures atomic create-if-not-exists
+	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("soldati %q already exists", soldati.Name)
+		}
+		return fmt.Errorf("failed to create soldati file: %w", err)
+	}
+	defer f.Close()
+
+	encoder := toml.NewEncoder(f)
+	if err := encoder.Encode(soldati); err != nil {
+		// Clean up the file if encoding fails
+		os.Remove(filePath)
+		return fmt.Errorf("failed to encode soldati: %w", err)
+	}
+
+	return nil
+}
+
+// save writes a soldati to its TOML file (overwrites existing)
 func (m *Manager) save(soldati *models.Soldati) error {
 	filePath := filepath.Join(m.dir, soldati.Name+".toml")
 

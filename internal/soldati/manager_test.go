@@ -294,3 +294,63 @@ func TestNewManager_CreatesDirectory(t *testing.T) {
 		t.Error("expected directory, got file")
 	}
 }
+
+func TestSoldatiManager_CreateInvalidName(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mgr, err := NewManager(tmpDir)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		wantErr bool
+	}{
+		{"../escape", true},         // Path traversal
+		{"foo/bar", true},           // Path separator
+		{"foo\\bar", true},          // Windows path separator
+		{".hidden", true},           // Dot prefix
+		{"..double", true},          // Double dot prefix
+		{"valid-name", false},       // Valid with hyphen
+		{"valid_name", false},       // Valid with underscore
+		{"Valid123", false},         // Valid with numbers
+		{"-invalid", true},          // Starts with hyphen
+		{"_invalid", true},          // Starts with underscore
+		{"name with spaces", true},  // Spaces not allowed
+		{"name@special", true},      // Special chars not allowed
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := mgr.Create(tt.name)
+			if tt.wantErr && err == nil {
+				t.Errorf("Create(%q) should have failed", tt.name)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("Create(%q) failed unexpectedly: %v", tt.name, err)
+			}
+		})
+	}
+}
+
+func TestSoldatiManager_CreateDuplicate(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mgr, err := NewManager(tmpDir)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	// Create first soldati
+	_, err = mgr.Create("vinnie")
+	if err != nil {
+		t.Fatalf("First Create failed: %v", err)
+	}
+
+	// Try to create duplicate
+	_, err = mgr.Create("vinnie")
+	if err == nil {
+		t.Error("expected error creating duplicate soldati, got nil")
+	}
+}
