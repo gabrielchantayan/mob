@@ -164,6 +164,9 @@ func New() Model {
 	spawner := agent.NewSpawner()
 	ub := underboss.New(mobDir, spawner)
 
+	// Focus the text input immediately
+	ti.Focus()
+
 	m := Model{
 		activeTab:        tabChat, // Chat-first
 		sidebarVisible:   true,
@@ -357,7 +360,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Normal navigation when not typing
 		switch msg.String() {
-		case "q", "ctrl+c":
+		case "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
 		case "tab", "right", "l":
@@ -423,8 +426,41 @@ func (m *Model) updateStreamingBlock(block agent.ChatContentBlock) {
 	m.currentBlocks = append(m.currentBlocks, block)
 }
 
+// isQuitCommand checks if the message is a vim-style quit command
+func isQuitCommand(msg string) bool {
+	msg = strings.TrimSpace(msg)
+	// Match :q, :q!, :qa, :qa!, :wq, :wq!, etc.
+	if !strings.HasPrefix(msg, ":") {
+		return false
+	}
+	cmd := strings.TrimPrefix(msg, ":")
+	cmd = strings.TrimSuffix(cmd, "!")
+	// Common quit commands
+	quitCmds := []string{"q", "qa", "wq", "wqa", "x", "xa"}
+	for _, qc := range quitCmds {
+		if cmd == qc {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Model) sendMessage() tea.Cmd {
 	message := m.chatInput.Value()
+	trimmed := strings.TrimSpace(message)
+
+	// Check for quit commands first
+	if isQuitCommand(trimmed) {
+		m.chatInput.Reset()
+		m.quitting = true
+		return tea.Quit
+	}
+
+	// Check for slash commands
+	if strings.HasPrefix(trimmed, "/") {
+		return m.handleSlashCommand(trimmed)
+	}
+
 	m.chatInput.Reset()
 
 	// Add user message to history
@@ -461,6 +497,32 @@ func (m *Model) sendMessage() tea.Cmd {
 
 	// Return command to listen for stream updates
 	return listenForStreamUpdates()
+}
+
+// handleSlashCommand processes slash commands like /new
+func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
+	m.chatInput.Reset()
+
+	// Parse the command (remove leading slash, get first word)
+	parts := strings.Fields(strings.TrimPrefix(cmd, "/"))
+	if len(parts) == 0 {
+		return nil
+	}
+
+	switch strings.ToLower(parts[0]) {
+	case "new":
+		// Clear the chat history and reset underboss session
+		m.chatMessages = []ChatMessage{}
+		m.currentBlocks = nil
+		m.chatError = ""
+		m.underboss.ClearSession()
+		m.updateChatViewport()
+		return nil
+	default:
+		// Unknown command - show error briefly
+		m.chatError = fmt.Sprintf("Unknown command: /%s", parts[0])
+		return nil
+	}
 }
 
 // listenForStreamUpdates returns a command that waits for the next stream update
@@ -1144,7 +1206,7 @@ func (m Model) renderHelp() string {
 	items = append(items, struct {
 		key  string
 		desc string
-	}{"q", "quit"})
+	}{":q", "quit"})
 
 	if m.activeTab == tabChat {
 		if m.chatInput.Focused() {
@@ -1176,7 +1238,7 @@ func (m Model) renderHelp() string {
 
 // Run starts the TUI application
 func Run() error {
-	p := tea.NewProgram(New(), tea.WithAltScreen())
+	p := tea.NewProgram(New(), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
 }

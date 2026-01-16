@@ -131,6 +131,18 @@ func (u *Underboss) Stop() error {
 	return err
 }
 
+// ClearSession stops the current agent and clears session state.
+// The next Ask call will start a fresh session.
+func (u *Underboss) ClearSession() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	if u.agent != nil {
+		_ = u.agent.Kill()
+		u.agent = nil
+	}
+}
+
 // IsRunning returns true if Underboss is active
 func (u *Underboss) IsRunning() bool {
 	u.mu.RLock()
