@@ -275,6 +275,24 @@ func GetTools() []*Tool {
 			Handler: handleListBeads,
 		},
 		{
+			Name:        "list_ready_beads",
+			Description: "Get beads that are ready to work - open status with no unmet blockers. Returns sorted by priority.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"turf": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by project/territory (optional)",
+					},
+					"limit": map[string]interface{}{
+						"type":        "integer",
+						"description": "Maximum number of beads to return (default 10)",
+					},
+				},
+			},
+			Handler: handleListReadyBeads,
+		},
+		{
 			Name:        "get_bead",
 			Description: "Check on a piece of work. Returns full details about a bead.",
 			InputSchema: map[string]interface{}{
@@ -416,6 +434,12 @@ func handleSpawnSoldati(ctx *ToolContext, args map[string]interface{}) (string, 
 		return "", fmt.Errorf("failed to create soldati: %w", err)
 	}
 
+	// Generate MCP config for tool access
+	mcpConfigPath, err := GenerateMCPConfig(ctx.MobDir)
+	if err != nil {
+		log.Printf("Warning: failed to generate MCP config: %v", err)
+	}
+
 	// Spawn the agent with the Soldati system prompt
 	spawnedAgent, err := ctx.Spawner.SpawnWithOptions(agent.SpawnOptions{
 		Type:         agent.AgentTypeSoldati,
@@ -423,6 +447,7 @@ func handleSpawnSoldati(ctx *ToolContext, args map[string]interface{}) (string, 
 		Turf:         turf,
 		WorkDir:      workDir,
 		SystemPrompt: agent.SoldatiSystemPrompt,
+		MCPConfig:    mcpConfigPath,
 		Model:        "sonnet", // Default to sonnet for cost efficiency
 	})
 	if err != nil {
@@ -479,6 +504,12 @@ func handleSpawnAssociate(ctx *ToolContext, args map[string]interface{}) (string
 		}
 	}
 
+	// Generate MCP config for tool access
+	mcpConfigPath, err := GenerateMCPConfig(ctx.MobDir)
+	if err != nil {
+		log.Printf("Warning: failed to generate MCP config: %v", err)
+	}
+
 	// Spawn the agent with the Associate system prompt
 	spawnedAgent, err := ctx.Spawner.SpawnWithOptions(agent.SpawnOptions{
 		Type:         agent.AgentTypeAssociate,
@@ -486,6 +517,7 @@ func handleSpawnAssociate(ctx *ToolContext, args map[string]interface{}) (string
 		Turf:         turf,
 		WorkDir:      workDir,
 		SystemPrompt: agent.AssociateSystemPrompt,
+		MCPConfig:    mcpConfigPath,
 		Model:        "sonnet", // Default to sonnet for cost efficiency
 	})
 	if err != nil {
@@ -971,6 +1003,65 @@ func handleListBeads(ctx *ToolContext, args map[string]interface{}) (string, err
 		}
 		if bead.Turf != "" {
 			sb.WriteString(fmt.Sprintf("  Turf: %s\n", bead.Turf))
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String(), nil
+}
+
+func handleListReadyBeads(ctx *ToolContext, args map[string]interface{}) (string, error) {
+	if ctx.BeadStore == nil {
+		return "", fmt.Errorf("bead store not available")
+	}
+
+	turf, _ := args["turf"].(string)
+	limit := 10 // Default limit
+	if limitArg, ok := args["limit"].(float64); ok {
+		limit = int(limitArg)
+	}
+
+	beads, err := ctx.BeadStore.ListReady(turf)
+	if err != nil {
+		return "", fmt.Errorf("failed to list ready beads: %w", err)
+	}
+
+	// Apply limit
+	if len(beads) > limit {
+		beads = beads[:limit]
+	}
+
+	if len(beads) == 0 {
+		if turf != "" {
+			return fmt.Sprintf("No ready beads for turf '%s'.", turf), nil
+		}
+		return "No ready beads right now.", nil
+	}
+
+	// Priority labels for display
+	priorityLabels := []string{"🔴 Critical", "🟠 High", "🟡 Medium", "🔵 Low", "⚪ Lowest"}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Ready beads (%d):\n\n", len(beads)))
+
+	for _, bead := range beads {
+		// Priority indicator
+		priority := bead.Priority
+		if priority < 0 {
+			priority = 0
+		}
+		if priority > 4 {
+			priority = 4
+		}
+		priorityLabel := priorityLabels[priority]
+
+		sb.WriteString(fmt.Sprintf("• [%s] %s\n", bead.ID, bead.Title))
+		sb.WriteString(fmt.Sprintf("  %s | %s | %s\n", priorityLabel, bead.Type, bead.Status))
+		if bead.Turf != "" {
+			sb.WriteString(fmt.Sprintf("  Turf: %s\n", bead.Turf))
+		}
+		if bead.Description != "" {
+			sb.WriteString(fmt.Sprintf("  Description: %s\n", truncate(bead.Description, 80)))
 		}
 		sb.WriteString("\n")
 	}

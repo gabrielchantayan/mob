@@ -14,8 +14,11 @@ import (
 	"github.com/gabe/mob/internal/agent"
 	"github.com/gabe/mob/internal/config"
 	"github.com/gabe/mob/internal/hook"
+	"github.com/gabe/mob/internal/mcp"
+	"github.com/gabe/mob/internal/models"
 	"github.com/gabe/mob/internal/registry"
 	"github.com/gabe/mob/internal/soldati"
+	"github.com/gabe/mob/internal/storage"
 	"github.com/gabe/mob/internal/turf"
 )
 
@@ -41,6 +44,7 @@ type Daemon struct {
 	registry     *registry.Registry
 	soldatiMgr   *soldati.Manager
 	turfMgr      *turf.Manager
+	beadStore    *storage.BeadStore
 	activeAgents map[string]*agent.Agent       // keyed by soldati name
 	hookManagers map[string]*hook.Manager      // keyed by soldati name
 	hookCancels  map[string]context.CancelFunc // keyed by soldati name
@@ -105,6 +109,14 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to create turf manager: %w", err)
 	}
 	d.turfMgr = turfMgr
+
+	// Initialize bead store for auto-assignment
+	beadsDir := filepath.Join(d.mobDir, "beads")
+	beadStore, err := storage.NewBeadStore(beadsDir)
+	if err != nil {
+		return fmt.Errorf("failed to create bead store: %w", err)
+	}
+	d.beadStore = beadStore
 
 	// Set up context for graceful shutdown
 	d.ctx, d.cancel = context.WithCancel(context.Background())
@@ -263,6 +275,90 @@ func (d *Daemon) patrol() {
 			delete(d.activeAgents, name)
 		}
 	}
+
+	// Auto-assign work to idle agents
+	d.assignWorkToIdleAgents()
+}
+
+// assignWorkToIdleAgents checks for idle soldati and assigns them the next ready bead
+func (d *Daemon) assignWorkToIdleAgents() {
+	if d.beadStore == nil {
+		return
+	}
+
+	// Get all active soldati from registry
+	agents, err := d.registry.ListByType("soldati")
+	if err != nil {
+		d.logger.Printf("Patrol: failed to list agents for auto-assign: %v\n", err)
+		return
+	}
+
+	for _, agentRecord := range agents {
+		// Only assign to idle agents
+		if agentRecord.Status != "idle" {
+			continue
+		}
+
+		// Check if agent has an empty hook (no pending work)
+		d.mu.RLock()
+		hookMgr, hasHook := d.hookManagers[agentRecord.Name]
+		d.mu.RUnlock()
+
+		if hasHook {
+			hook, _ := hookMgr.Read()
+			if hook != nil {
+				// Hook has work, skip
+				continue
+			}
+		}
+
+		// Find next ready bead for this agent's turf
+		readyBeads, err := d.beadStore.ListReady(agentRecord.Turf)
+		if err != nil || len(readyBeads) == 0 {
+			continue
+		}
+
+		// Pick first (highest priority) ready bead
+		nextBead := readyBeads[0]
+
+		d.logger.Printf("Patrol: auto-assigning bead %s to idle agent '%s'\n",
+			nextBead.ID, agentRecord.Name)
+
+		// Assign via hook (same as assign_bead MCP tool)
+		if err := d.AssignWork(agentRecord.Name, nextBead.ID, nextBead.Title); err != nil {
+			d.logger.Printf("Patrol: failed to auto-assign: %v\n", err)
+			continue
+		}
+
+		// Update bead status and assignee
+		nextBead.Status = models.BeadStatusInProgress
+		nextBead.Assignee = agentRecord.Name
+		if _, err := d.beadStore.Update(nextBead); err != nil {
+			d.logger.Printf("Patrol: failed to update bead status: %v\n", err)
+		}
+
+		// Nudge the agent to check their hook
+		d.nudgeAgent(agentRecord.Name)
+	}
+}
+
+// nudgeAgent sends a nudge to a specific agent to check their hook
+func (d *Daemon) nudgeAgent(name string) {
+	d.mu.RLock()
+	a, ok := d.activeAgents[name]
+	d.mu.RUnlock()
+
+	if !ok || !a.IsRunning() {
+		return
+	}
+
+	go func() {
+		d.logger.Printf("Patrol: nudging agent '%s' to check hook\n", name)
+		_, err := a.Chat("Check your hook. If there's work, do it.")
+		if err != nil {
+			d.logger.Printf("Patrol: failed to nudge agent '%s': %v\n", name, err)
+		}
+	}()
 }
 
 // nudgeAllAgents sends a nudge to all active agents to keep them working.
@@ -446,6 +542,12 @@ func (d *Daemon) spawnSoldatiAgent(name string) error {
 		workDir = d.mobDir
 	}
 
+	// Generate MCP config for tool access
+	mcpConfigPath, err := mcp.GenerateMCPConfig(d.mobDir)
+	if err != nil {
+		d.logger.Printf("Warning: failed to generate MCP config: %v", err)
+	}
+
 	// Spawn the agent with system prompt
 	a, err := d.spawner.SpawnWithOptions(agent.SpawnOptions{
 		Type:         agent.AgentTypeSoldati,
@@ -453,6 +555,7 @@ func (d *Daemon) spawnSoldatiAgent(name string) error {
 		Turf:         "", // Will be assigned when work is given
 		WorkDir:      workDir,
 		SystemPrompt: agent.SoldatiSystemPrompt,
+		MCPConfig:    mcpConfigPath,
 		Model:        "sonnet", // Default to sonnet for cost efficiency
 	})
 	if err != nil {
@@ -657,6 +760,12 @@ func (d *Daemon) resolveTurfPath(turfName string) string {
 func (d *Daemon) respawnSoldati(name string, record *registry.AgentRecord) error {
 	workDir := d.resolveTurfPath(record.Turf)
 
+	// Generate MCP config for tool access
+	mcpConfigPath, err := mcp.GenerateMCPConfig(d.mobDir)
+	if err != nil {
+		d.logger.Printf("Warning: failed to generate MCP config: %v", err)
+	}
+
 	// Spawn a new agent process
 	a, err := d.spawner.SpawnWithOptions(agent.SpawnOptions{
 		Type:         agent.AgentTypeSoldati,
@@ -664,6 +773,7 @@ func (d *Daemon) respawnSoldati(name string, record *registry.AgentRecord) error
 		Turf:         record.Turf,
 		WorkDir:      workDir,
 		SystemPrompt: agent.SoldatiSystemPrompt,
+		MCPConfig:    mcpConfigPath,
 		Model:        "sonnet", // Default to sonnet for cost efficiency
 	})
 	if err != nil {

@@ -305,3 +305,198 @@ func TestBeadStore_Update(t *testing.T) {
 		t.Errorf("expected status 'in_progress', got '%s'", updated.Status)
 	}
 }
+
+func TestBeadStore_ListReady(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "mob-bead-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	store, err := NewBeadStore(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create test beads
+	// Bead 1: Closed (blocker for bead 2)
+	bead1 := &models.Bead{
+		Title:     "Completed task",
+		Status:    models.BeadStatusClosed,
+		Priority:  2,
+		Type:      models.BeadTypeTask,
+		Turf:      "frontend",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	bead1, err = store.Create(bead1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Bead 2: Open with closed blocker (should be ready)
+	bead2 := &models.Bead{
+		Title:     "Task blocked by completed",
+		Status:    models.BeadStatusOpen,
+		Priority:  1,
+		Type:      models.BeadTypeTask,
+		Turf:      "frontend",
+		Blocks:    []string{bead1.ID},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	bead2, err = store.Create(bead2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Bead 3: Open with no blockers (should be ready, highest priority)
+	bead3 := &models.Bead{
+		Title:     "Urgent task",
+		Status:    models.BeadStatusOpen,
+		Priority:  0,
+		Type:      models.BeadTypeTask,
+		Turf:      "frontend",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	bead3, err = store.Create(bead3)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Bead 4: Open (blocker for bead 5)
+	bead4 := &models.Bead{
+		Title:     "Open blocker",
+		Status:    models.BeadStatusOpen,
+		Priority:  2,
+		Type:      models.BeadTypeTask,
+		Turf:      "backend",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	bead4, err = store.Create(bead4)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Bead 5: Open with open blocker (should NOT be ready)
+	bead5 := &models.Bead{
+		Title:     "Task blocked by open",
+		Status:    models.BeadStatusOpen,
+		Priority:  3,
+		Type:      models.BeadTypeTask,
+		Turf:      "backend",
+		Blocks:    []string{bead4.ID},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	_, err = store.Create(bead5)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Bead 6: In progress (should NOT be ready)
+	bead6 := &models.Bead{
+		Title:     "In progress task",
+		Status:    models.BeadStatusInProgress,
+		Priority:  1,
+		Type:      models.BeadTypeTask,
+		Turf:      "frontend",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	_, err = store.Create(bead6)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test 1: List all ready beads (no turf filter)
+	t.Run("all ready beads", func(t *testing.T) {
+		ready, err := store.ListReady("")
+		if err != nil {
+			t.Fatalf("failed to list ready beads: %v", err)
+		}
+
+		// Should return: bead3 (priority 0), bead2 (priority 1), bead4 (priority 2)
+		if len(ready) != 3 {
+			t.Errorf("expected 3 ready beads, got %d", len(ready))
+			for _, b := range ready {
+				t.Logf("  - %s (priority %d, status %s)", b.Title, b.Priority, b.Status)
+			}
+		}
+
+		// Check priority ordering
+		if len(ready) >= 2 {
+			if ready[0].Priority > ready[1].Priority {
+				t.Errorf("beads not sorted by priority: %d > %d", ready[0].Priority, ready[1].Priority)
+			}
+		}
+
+		// Check first bead is highest priority
+		if len(ready) > 0 && ready[0].ID != bead3.ID {
+			t.Errorf("expected first bead to be %s (priority 0), got %s (priority %d)",
+				bead3.ID, ready[0].ID, ready[0].Priority)
+		}
+	})
+
+	// Test 2: Filter by turf
+	t.Run("filter by turf", func(t *testing.T) {
+		ready, err := store.ListReady("frontend")
+		if err != nil {
+			t.Fatalf("failed to list ready beads: %v", err)
+		}
+
+		// Should return: bead3 (priority 0), bead2 (priority 1)
+		if len(ready) != 2 {
+			t.Errorf("expected 2 ready frontend beads, got %d", len(ready))
+		}
+
+		for _, b := range ready {
+			if b.Turf != "frontend" {
+				t.Errorf("expected turf 'frontend', got '%s'", b.Turf)
+			}
+		}
+	})
+
+	// Test 3: Verify blocked bead is not returned
+	t.Run("blocked bead not ready", func(t *testing.T) {
+		ready, err := store.ListReady("")
+		if err != nil {
+			t.Fatalf("failed to list ready beads: %v", err)
+		}
+
+		// bead5 should not be in the list (has open blocker bead4)
+		for _, b := range ready {
+			if b.Title == "Task blocked by open" {
+				t.Error("bead with open blocker should not be ready")
+			}
+		}
+	})
+
+	// Test 4: Verify closed and in-progress beads not returned
+	t.Run("non-open beads not ready", func(t *testing.T) {
+		ready, err := store.ListReady("")
+		if err != nil {
+			t.Fatalf("failed to list ready beads: %v", err)
+		}
+
+		for _, b := range ready {
+			if b.Status != models.BeadStatusOpen {
+				t.Errorf("expected only open beads, got status '%s'", b.Status)
+			}
+		}
+	})
+
+	// Test 5: Empty turf returns no beads
+	t.Run("nonexistent turf", func(t *testing.T) {
+		ready, err := store.ListReady("nonexistent")
+		if err != nil {
+			t.Fatalf("failed to list ready beads: %v", err)
+		}
+
+		if len(ready) != 0 {
+			t.Errorf("expected 0 beads for nonexistent turf, got %d", len(ready))
+		}
+	})
+}

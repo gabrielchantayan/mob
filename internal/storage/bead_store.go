@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -96,6 +97,62 @@ func (s *BeadStore) List(filter BeadFilter) ([]*models.Bead, error) {
 	}
 
 	return filtered, nil
+}
+
+// ListReady returns beads that are ready for assignment:
+// - Status is "open"
+// - All blocking beads (in Blocks array) are closed
+// - Sorted by priority (0 = highest first)
+func (s *BeadStore) ListReady(turf string) ([]*models.Bead, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	allBeads, err := s.readAllBeads()
+	if err != nil {
+		return nil, err
+	}
+
+	// Build map of closed bead IDs for blocker checking
+	closedIDs := make(map[string]bool)
+	for _, b := range allBeads {
+		if b.Status == models.BeadStatusClosed {
+			closedIDs[b.ID] = true
+		}
+	}
+
+	var ready []*models.Bead
+	for _, b := range allBeads {
+		// Must be open
+		if b.Status != models.BeadStatusOpen {
+			continue
+		}
+
+		// Turf filter
+		if turf != "" && b.Turf != turf {
+			continue
+		}
+
+		// Check blockers - all must be closed
+		allBlockersClosed := true
+		for _, blockerID := range b.Blocks {
+			if !closedIDs[blockerID] {
+				allBlockersClosed = false
+				break
+			}
+		}
+		if !allBlockersClosed {
+			continue
+		}
+
+		ready = append(ready, b)
+	}
+
+	// Sort by priority (0 = highest priority, should be first)
+	sort.Slice(ready, func(i, j int) bool {
+		return ready[i].Priority < ready[j].Priority
+	})
+
+	return ready, nil
 }
 
 // Get retrieves a bead by ID
