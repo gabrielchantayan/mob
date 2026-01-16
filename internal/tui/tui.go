@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -128,7 +128,7 @@ type Model struct {
 	activeSoldati []SoldatiStatus
 
 	// Chat state
-	chatInput       textinput.Model
+	chatInput       textarea.Model
 	chatViewport    viewport.Model
 	chatMessages    []ChatMessage
 	chatWaiting     bool
@@ -143,11 +143,14 @@ func New() Model {
 	home, _ := os.UserHomeDir()
 	mobDir := filepath.Join(home, "mob")
 
-	// Initialize text input - minimal style
-	ti := textinput.New()
-	ti.Placeholder = "Type a message..."
-	ti.CharLimit = 2000
-	ti.Width = 80
+	// Initialize textarea for multiline input
+	ti := textarea.New()
+	ti.Placeholder = "Type a message... (Alt+Enter for newline)"
+	ti.CharLimit = 10000
+	ti.SetWidth(80)
+	ti.SetHeight(3)
+	ti.ShowLineNumbers = false
+	ti.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+enter")
 
 	// Initialize viewport for chat history
 	vp := viewport.New(80, 10)
@@ -196,7 +199,7 @@ func (m *Model) updateLayout() {
 	m.chatViewport.Height = m.height - 12
 
 	// Update input width
-	m.chatInput.Width = mainWidth - 8
+	m.chatInput.SetWidth(mainWidth - 8)
 }
 
 // loadData fetches current state from the various managers
@@ -313,6 +316,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		// Handle chat input when on chat tab
 		if m.activeTab == tabChat && m.chatInput.Focused() {
+			// Handle paste events with CRLF normalization
+			if msg.Paste {
+				normalized := strings.ReplaceAll(string(msg.Runes), "\r\n", "\n")
+				normalized = strings.ReplaceAll(normalized, "\r", "\n")
+				m.chatInput.InsertString(normalized)
+				return m, nil
+			}
+
 			switch msg.String() {
 			case "ctrl+c":
 				m.quitting = true
@@ -321,7 +332,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatInput.Blur()
 				return m, nil
 			case "enter":
-				if !m.chatWaiting && m.chatInput.Value() != "" {
+				if !m.chatWaiting && strings.TrimSpace(m.chatInput.Value()) != "" {
 					return m, m.sendMessage()
 				}
 				return m, nil
@@ -358,7 +369,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "i", "enter":
 			if m.activeTab == tabChat && !m.chatWaiting {
 				m.chatInput.Focus()
-				return m, textinput.Blink
+				return m, textarea.Blink
 			}
 		}
 
@@ -399,7 +410,7 @@ func (m *Model) updateStreamingBlock(block agent.ChatContentBlock) {
 
 func (m *Model) sendMessage() tea.Cmd {
 	message := m.chatInput.Value()
-	m.chatInput.SetValue("")
+	m.chatInput.Reset()
 
 	// Add user message to history
 	m.chatMessages = append(m.chatMessages, ChatMessage{
@@ -999,6 +1010,7 @@ func (m Model) renderHelp() string {
 				desc string
 			}{
 				{"enter", "send"},
+				{"alt+enter", "newline"},
 				{"esc", "cancel"},
 			}
 		} else {
