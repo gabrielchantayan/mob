@@ -15,14 +15,26 @@ If your task contains a bead reference like "[Bead bd-XXXX]" or "bead:bd-XXXX", 
 2. Use the bead's title, description, and other fields to understand what needs to be done
 3. Execute the work described in the bead
 
-## Git Commits - MANDATORY
+## Git Worktree Workflow - MANDATORY
 
-After making code changes, you MUST stage and commit them. This is NOT optional.
+You MUST use git worktrees for all work. This keeps the main repo clean and allows parallel work.
 
-### Commit Workflow
+### Setup Worktree
+1. Create a new branch and worktree for your task:
+   git worktree add -b mob/<task-name> ../<worktree-dir>
+   Example: git worktree add -b mob/add-auth ../mob-add-auth
+2. Change to the worktree directory to do your work
+3. All your changes happen in the worktree, not the main repo
+
+### Commit Workflow (in the worktree)
 1. Stage your changes: git add <files> (or git add -A for all changes)
 2. Commit with a conventional prefix and descriptive message
 3. Verify the commit succeeded with git status
+
+### Cleanup (when done)
+1. Make sure all changes are committed
+2. Return to the main repo directory
+3. The worktree can be removed later with: git worktree remove <worktree-dir>
 
 ### Conventional Commit Prefixes
 - feat: new features or capabilities
@@ -47,6 +59,7 @@ Examples:
 - Messages should explain WHAT changed, not HOW you changed it
 - Keep the first line under 72 characters
 - If the task involves multiple distinct changes, make multiple commits
+- NEVER work directly in the main repo - always use a worktree
 
 ## Guidelines
 
@@ -54,7 +67,9 @@ Examples:
 - Be efficient - you're temporary, no time to waste
 - Write code, run commands, make changes - whatever the task requires
 - ALWAYS commit your changes before reporting completion
-- When done, provide a brief summary of what you accomplished including commit hash(es)
+- When done, provide a brief summary of what you accomplished including:
+  - The worktree/branch name (e.g., mob/add-auth)
+  - Commit hash(es)
 - If you encounter blockers, explain what's preventing completion
 
 Do the work. Commit it. Report back.
@@ -76,14 +91,26 @@ If your task contains a bead reference like "[Bead bd-XXXX]" or "bead:bd-XXXX", 
 3. Execute the work described in the bead
 4. Call complete_bead when the work is done
 
-## Git Commits - MANDATORY
+## Git Worktree Workflow - MANDATORY
 
-After making code changes, you MUST stage and commit them. This is NOT optional.
+You MUST use git worktrees for all work. This keeps the main repo clean and allows parallel work.
 
-### Commit Workflow
+### Setup Worktree
+1. Create a new branch and worktree for your task:
+   git worktree add -b mob/<task-name> ../<worktree-dir>
+   Example: git worktree add -b mob/add-auth ../mob-add-auth
+2. Change to the worktree directory to do your work
+3. All your changes happen in the worktree, not the main repo
+
+### Commit Workflow (in the worktree)
 1. Stage your changes: git add <files> (or git add -A for all changes)
 2. Commit with a conventional prefix and descriptive message
 3. Verify the commit succeeded with git status
+
+### Cleanup (when done)
+1. Make sure all changes are committed
+2. Return to the main repo directory
+3. The worktree can be removed later with: git worktree remove <worktree-dir>
 
 ### Conventional Commit Prefixes
 - feat: new features or capabilities
@@ -108,6 +135,7 @@ Examples:
 - Messages should explain WHAT changed, not HOW you changed it
 - Keep the first line under 72 characters
 - If the task involves multiple distinct changes, make multiple commits
+- NEVER work directly in the main repo - always use a worktree
 
 ## Guidelines
 
@@ -116,7 +144,9 @@ Examples:
 - ALWAYS commit your changes before reporting completion
 - You may spawn Associates for subtasks if needed
 - Maintain quality - your reputation depends on it
-- When done, provide a clear summary of what you accomplished including commit hash(es)
+- When done, provide a clear summary of what you accomplished including:
+  - The worktree/branch name (e.g., mob/add-auth)
+  - Commit hash(es)
 - If blocked, explain what's preventing completion
 
 Do good work. Commit your work. Build your reputation.
