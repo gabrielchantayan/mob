@@ -3,7 +3,6 @@ package underboss
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -86,37 +85,14 @@ func (s *Session) sendMessage(ctx context.Context, message string) error {
 		return ErrUnderbossNotRunning
 	}
 
-	// Send the message using the chat method
-	params := map[string]interface{}{
-		"message": message,
-	}
-
-	resp, err := agent.Call("chat", params)
+	// Send the message using the Chat method
+	resp, err := agent.Chat(message)
 	if err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
 	}
 
-	if resp.Error != nil {
-		return fmt.Errorf("underboss error: %s", resp.Error.Message)
-	}
-
-	// Parse and display the response
-	if resp.Result != nil {
-		var result map[string]interface{}
-		if err := json.Unmarshal(resp.Result, &result); err != nil {
-			// Just print raw result if we can't parse it
-			fmt.Fprintf(s.output, "\n%s\n", string(resp.Result))
-			return nil
-		}
-
-		if response, ok := result["response"].(string); ok {
-			fmt.Fprintf(s.output, "\n%s\n", response)
-		} else {
-			// Print the whole result if we can't find a response field
-			formatted, _ := json.MarshalIndent(result, "", "  ")
-			fmt.Fprintf(s.output, "\n%s\n", string(formatted))
-		}
-	}
+	// Display the response
+	fmt.Fprintf(s.output, "\n%s\n", resp.GetText())
 
 	return nil
 }

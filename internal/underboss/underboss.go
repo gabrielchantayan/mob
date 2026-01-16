@@ -2,13 +2,17 @@ package underboss
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/gabe/mob/internal/agent"
+	"github.com/gabe/mob/internal/mcp"
+	"github.com/gabe/mob/internal/registry"
+	"github.com/gabe/mob/internal/soldati"
 )
 
 var (
@@ -21,18 +25,41 @@ var (
 
 // Underboss manages the persistent chief-of-staff Claude instance
 type Underboss struct {
-	agent   *agent.Agent
-	spawner *agent.Spawner
-	mobDir  string
-	mu      sync.RWMutex
+	agent         *agent.Agent
+	spawner       *agent.Spawner
+	registry      *registry.Registry
+	mobDir        string
+	mcpConfigPath string
+	mcpEnabled    bool
+	mu            sync.RWMutex
 }
 
 // New creates a new Underboss manager
 func New(mobDir string, spawner *agent.Spawner) *Underboss {
+	reg := registry.New(registry.DefaultPath(mobDir))
 	return &Underboss{
-		mobDir:  mobDir,
-		spawner: spawner,
+		mobDir:     mobDir,
+		spawner:    spawner,
+		registry:   reg,
+		mcpEnabled: true, // Enable MCP by default
 	}
+}
+
+// NewWithRegistry creates a new Underboss manager with a custom registry
+func NewWithRegistry(mobDir string, spawner *agent.Spawner, reg *registry.Registry) *Underboss {
+	return &Underboss{
+		mobDir:     mobDir,
+		spawner:    spawner,
+		registry:   reg,
+		mcpEnabled: true,
+	}
+}
+
+// SetMCPEnabled enables or disables MCP tools for the Underboss
+func (u *Underboss) SetMCPEnabled(enabled bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.mcpEnabled = enabled
 }
 
 // Start spawns or reconnects to the Underboss agent
@@ -60,8 +87,28 @@ func (u *Underboss) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Spawn the underboss agent
-	a, err := u.spawner.Spawn(agent.AgentTypeUnderboss, "underboss", "", workDir)
+	// Generate MCP config if enabled
+	var mcpConfigPath string
+	if u.mcpEnabled {
+		var err error
+		mcpConfigPath, err = mcp.GenerateMCPConfig(workDir)
+		if err != nil {
+			// Log warning but continue without MCP
+			fmt.Fprintf(os.Stderr, "Warning: failed to generate MCP config: %v\n", err)
+		} else {
+			u.mcpConfigPath = mcpConfigPath
+		}
+	}
+
+	// Spawn the underboss agent with personality and MCP tools
+	a, err := u.spawner.SpawnWithOptions(agent.SpawnOptions{
+		Type:         agent.AgentTypeUnderboss,
+		Name:         "underboss",
+		Turf:         "",
+		WorkDir:      workDir,
+		SystemPrompt: DefaultSystemPrompt,
+		MCPConfig:    mcpConfigPath,
+	})
 	if err != nil {
 		return err
 	}
@@ -113,105 +160,234 @@ func (u *Underboss) GetUnderbossDir() string {
 // Ask sends a question to the Underboss and returns the response.
 // It will start the Underboss if not already running.
 func (u *Underboss) Ask(ctx context.Context, question string) (string, error) {
+	resp, err := u.AskFull(ctx, question)
+	if err != nil {
+		return "", err
+	}
+	return resp.GetText(), nil
+}
+
+// AskFull sends a question and returns the full response with all content blocks.
+func (u *Underboss) AskFull(ctx context.Context, question string) (*agent.ChatResponse, error) {
 	// Start Underboss if not running
 	if !u.IsRunning() {
 		if err := u.Start(ctx); err != nil {
-			return "", err
+			return nil, err
 		}
 	}
 
 	u.mu.RLock()
-	agent := u.agent
+	a := u.agent
 	u.mu.RUnlock()
 
-	if agent == nil {
-		return "", ErrUnderbossNotRunning
+	if a == nil {
+		return nil, ErrUnderbossNotRunning
 	}
 
-	// Send the question using the ask method
-	params := map[string]interface{}{
-		"question": question,
-	}
+	return a.Chat(question)
+}
 
-	resp, err := agent.Call("ask", params)
-	if err != nil {
-		return "", err
-	}
-
-	if resp.Error != nil {
-		return "", errors.New(resp.Error.Message)
-	}
-
-	// Parse the response
-	if resp.Result != nil {
-		var result map[string]interface{}
-		if err := json.Unmarshal(resp.Result, &result); err != nil {
-			// Return raw result if we can't parse it
-			return string(resp.Result), nil
+// AskStream sends a question with streaming callback for real-time updates.
+func (u *Underboss) AskStream(ctx context.Context, question string, callback agent.StreamCallback) (*agent.ChatResponse, error) {
+	// Start Underboss if not running
+	if !u.IsRunning() {
+		if err := u.Start(ctx); err != nil {
+			return nil, err
 		}
-
-		if response, ok := result["response"].(string); ok {
-			return response, nil
-		}
-
-		// Return the whole result as string if no response field
-		return string(resp.Result), nil
 	}
 
-	return "", nil
+	u.mu.RLock()
+	a := u.agent
+	u.mu.RUnlock()
+
+	if a == nil {
+		return nil, ErrUnderbossNotRunning
+	}
+
+	return a.ChatStream(question, callback)
 }
 
 // Tell sends an instruction to the Underboss and returns the acknowledgment.
 // It will start the Underboss if not already running.
 func (u *Underboss) Tell(ctx context.Context, instruction string) (string, error) {
-	// Start Underboss if not running
-	if !u.IsRunning() {
-		if err := u.Start(ctx); err != nil {
-			return "", err
-		}
-	}
-
-	u.mu.RLock()
-	agent := u.agent
-	u.mu.RUnlock()
-
-	if agent == nil {
-		return "", ErrUnderbossNotRunning
-	}
-
-	// Send the instruction using the tell method
-	params := map[string]interface{}{
-		"instruction": instruction,
-	}
-
-	resp, err := agent.Call("tell", params)
+	resp, err := u.AskFull(ctx, instruction)
 	if err != nil {
 		return "", err
 	}
+	return resp.GetText(), nil
+}
 
-	if resp.Error != nil {
-		return "", errors.New(resp.Error.Message)
+// Registry returns the agent registry
+func (u *Underboss) Registry() *registry.Registry {
+	return u.registry
+}
+
+// SpawnSoldati creates a new persistent worker (Soldati)
+// This provides direct access for CLI/TUI, bypassing MCP
+func (u *Underboss) SpawnSoldati(name, turf, workDir string) (*agent.Agent, error) {
+	// Generate name if not provided
+	if name == "" {
+		agents, err := u.registry.ListByType("soldati")
+		if err != nil {
+			return nil, fmt.Errorf("failed to list existing soldati: %w", err)
+		}
+		usedNames := make([]string, 0, len(agents))
+		for _, a := range agents {
+			usedNames = append(usedNames, a.Name)
+		}
+		name = soldati.GenerateUniqueName(usedNames)
 	}
 
-	// Parse the response
-	if resp.Result != nil {
-		var result map[string]interface{}
-		if err := json.Unmarshal(resp.Result, &result); err != nil {
-			// Return raw result if we can't parse it
-			return string(resp.Result), nil
+	// Default work directory
+	if workDir == "" {
+		var err error
+		workDir, err = os.Getwd()
+		if err != nil {
+			return nil, err
 		}
-
-		if ack, ok := result["acknowledgment"].(string); ok {
-			return ack, nil
-		}
-
-		if response, ok := result["response"].(string); ok {
-			return response, nil
-		}
-
-		// Return the whole result as string if no expected field
-		return string(resp.Result), nil
 	}
 
-	return "", nil
+	// Spawn the agent
+	a, err := u.spawner.SpawnWithOptions(agent.SpawnOptions{
+		Type:    agent.AgentTypeSoldati,
+		Name:    name,
+		Turf:    turf,
+		WorkDir: workDir,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to spawn soldati: %w", err)
+	}
+
+	// Register in registry
+	record := &registry.AgentRecord{
+		ID:        a.ID,
+		Type:      "soldati",
+		Name:      name,
+		Turf:      turf,
+		Status:    "active",
+		StartedAt: a.StartedAt,
+	}
+	if err := u.registry.Register(record); err != nil {
+		return nil, fmt.Errorf("failed to register soldati: %w", err)
+	}
+
+	return a, nil
+}
+
+// SpawnAssociate creates a new temporary worker (Associate)
+// This provides direct access for CLI/TUI, bypassing MCP
+func (u *Underboss) SpawnAssociate(turf, task, workDir string) (*agent.Agent, error) {
+	// Default work directory
+	if workDir == "" {
+		var err error
+		workDir, err = os.Getwd()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Spawn the agent
+	a, err := u.spawner.SpawnWithOptions(agent.SpawnOptions{
+		Type:    agent.AgentTypeAssociate,
+		Name:    "", // Associates don't get names
+		Turf:    turf,
+		WorkDir: workDir,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to spawn associate: %w", err)
+	}
+
+	// Register in registry
+	record := &registry.AgentRecord{
+		ID:        a.ID,
+		Type:      "associate",
+		Turf:      turf,
+		Task:      task,
+		Status:    "active",
+		StartedAt: a.StartedAt,
+	}
+	if err := u.registry.Register(record); err != nil {
+		return nil, fmt.Errorf("failed to register associate: %w", err)
+	}
+
+	return a, nil
+}
+
+// ListAgents returns all agents from the registry
+func (u *Underboss) ListAgents() ([]*registry.AgentRecord, error) {
+	return u.registry.List()
+}
+
+// ListSoldati returns all soldati from the registry
+func (u *Underboss) ListSoldati() ([]*registry.AgentRecord, error) {
+	return u.registry.ListByType("soldati")
+}
+
+// ListAssociates returns all associates from the registry
+func (u *Underboss) ListAssociates() ([]*registry.AgentRecord, error) {
+	return u.registry.ListByType("associate")
+}
+
+// GetAgent retrieves an agent by ID or name
+func (u *Underboss) GetAgent(idOrName string) (*registry.AgentRecord, error) {
+	// Try by ID first
+	if record, err := u.registry.Get(idOrName); err == nil {
+		return record, nil
+	}
+	// Try by name
+	return u.registry.GetByName(idOrName)
+}
+
+// KillAgent terminates an agent by ID or name
+func (u *Underboss) KillAgent(idOrName string) error {
+	// Find the agent
+	record, err := u.GetAgent(idOrName)
+	if err != nil {
+		return err
+	}
+
+	// Kill in spawner (ignore error if not found)
+	_ = u.spawner.Kill(record.ID)
+
+	// Remove from registry
+	return u.registry.Unregister(record.ID)
+}
+
+// UpdateAgentStatus updates an agent's status
+func (u *Underboss) UpdateAgentStatus(idOrName, status string) error {
+	record, err := u.GetAgent(idOrName)
+	if err != nil {
+		return err
+	}
+	return u.registry.UpdateStatus(record.ID, status)
+}
+
+// AssignTask assigns a task to an agent
+func (u *Underboss) AssignTask(idOrName, task string) error {
+	record, err := u.GetAgent(idOrName)
+	if err != nil {
+		return err
+	}
+	return u.registry.UpdateTask(record.ID, task)
+}
+
+// NudgeAgent pings an agent to update its last seen time
+func (u *Underboss) NudgeAgent(idOrName string) error {
+	record, err := u.GetAgent(idOrName)
+	if err != nil {
+		return err
+	}
+	return u.registry.Ping(record.ID)
+}
+
+// AgentInfo contains information about a spawned agent
+type AgentInfo struct {
+	ID        string
+	Type      string
+	Name      string
+	Turf      string
+	Status    string
+	Task      string
+	StartedAt time.Time
+	LastPing  time.Time
 }

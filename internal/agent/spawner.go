@@ -6,8 +6,6 @@ import (
 	"os/exec"
 	"sync"
 	"time"
-
-	"github.com/gabe/mob/internal/ipc"
 )
 
 // CommandCreator is a function type that creates exec.Cmd instances
@@ -62,47 +60,44 @@ func generateID() string {
 	return hex.EncodeToString(b)
 }
 
-// Spawn starts a new Claude Code instance
-// - Runs: claude --dangerously-skip-permissions --print jsonrpc
-// - Sets working directory
-// - Connects stdin/stdout to IPC client
+// SpawnOptions configures agent creation
+type SpawnOptions struct {
+	Type         AgentType
+	Name         string
+	Turf         string
+	WorkDir      string
+	SystemPrompt string // Injected on first call via --system-prompt
+	MCPConfig    string // Path to MCP config JSON file
+}
+
+// Spawn creates a new Claude Code agent that can send messages
+// Uses Claude's stream-json protocol with -p mode and --resume for session continuity
 func (s *Spawner) Spawn(agentType AgentType, name string, turf string, workDir string) (*Agent, error) {
+	return s.SpawnWithOptions(SpawnOptions{
+		Type:    agentType,
+		Name:    name,
+		Turf:    turf,
+		WorkDir: workDir,
+	})
+}
+
+// SpawnWithOptions creates a new agent with full configuration
+func (s *Spawner) SpawnWithOptions(opts SpawnOptions) (*Agent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Create the command
-	cmd := s.commandCreator(s.claudePath, "--dangerously-skip-permissions", "--print", "jsonrpc")
-	cmd.Dir = workDir
-
-	// Set up pipes for IPC
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, err
-	}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-
-	// Start the process
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-
-	// Create IPC client
-	client := ipc.NewClient(stdin, stdout)
-
-	// Create agent
+	// Create agent (no process yet - spawns per-call)
 	id := generateID()
 	agent := &Agent{
-		ID:        id,
-		Type:      agentType,
-		Name:      name,
-		Turf:      turf,
-		Cmd:       cmd,
-		Client:    client,
-		StartedAt: time.Now(),
+		ID:           id,
+		Type:         opts.Type,
+		Name:         opts.Name,
+		Turf:         opts.Turf,
+		WorkDir:      opts.WorkDir,
+		SystemPrompt: opts.SystemPrompt,
+		MCPConfig:    opts.MCPConfig,
+		StartedAt:    time.Now(),
+		spawner:      s,
 	}
 
 	// Track the agent

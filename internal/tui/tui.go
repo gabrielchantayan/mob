@@ -1,31 +1,106 @@
 package tui
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/gabe/mob/internal/agent"
 	"github.com/gabe/mob/internal/daemon"
+	"github.com/gabe/mob/internal/models"
 	"github.com/gabe/mob/internal/soldati"
 	"github.com/gabe/mob/internal/storage"
-	"github.com/gabe/mob/internal/turf"
+	"github.com/gabe/mob/internal/underboss"
 )
 
 // tab represents the active tab in the TUI
 type tab int
 
 const (
-	tabDashboard tab = iota
-	tabAgents
-	tabBeads
+	tabChat tab = iota
 	tabLogs
 )
 
 // Tab names for display
-var tabNames = []string{"Dashboard", "Agents", "Beads", "Logs"}
+var tabNames = []string{"Chat", "Logs"}
+
+// Layout constants
+const (
+	sidebarWidthConst  = 42  // Fixed sidebar width
+	minWidthForSidebar = 120 // Below this, hide sidebar
+)
+
+// SoldatiStatus for sidebar display
+type SoldatiStatus struct {
+	Name   string
+	Status string // "active", "idle"
+}
+
+// Tool icons (OpenCode style)
+const (
+	iconBash   = "$" // Shell commands
+	iconRead   = "→" // File read
+	iconSearch = "✱" // Search/grep
+	iconWrite  = "←" // File write
+	iconTask   = "◉" // Task/todo operations
+	iconThink  = "◐" // Thinking
+)
+
+// Tool name to icon mapping
+var toolIcons = map[string]string{
+	"Bash":      iconBash,
+	"Read":      iconRead,
+	"Grep":      iconSearch,
+	"Glob":      iconSearch,
+	"Write":     iconWrite,
+	"Edit":      iconWrite,
+	"TodoWrite": iconTask,
+	"Task":      iconTask,
+}
+
+// ChatMessage represents a message in the chat history
+type ChatMessage struct {
+	Role       string // "user" or "assistant"
+	Content    string // For user messages
+	Blocks     []agent.ChatContentBlock // For assistant messages
+	Model      string
+	DurationMs int64
+	Timestamp  time.Time
+}
+
+// chatResponseMsg is sent when Claude responds
+type chatResponseMsg struct {
+	response *agent.ChatResponse
+	err      error
+}
+
+// streamUpdateMsg is sent for streaming updates
+type streamUpdateMsg struct {
+	block agent.ChatContentBlock
+}
+
+// streamDoneMsg signals streaming is complete with final response
+type streamDoneMsg struct {
+	response *agent.ChatResponse
+	err      error
+}
+
+// streamState holds the streaming state
+type streamState struct {
+	blockChan    chan agent.ChatContentBlock
+	responseChan chan streamDoneMsg
+}
+
+// activeStream holds the current streaming state
+var activeStream *streamState
 
 // Model represents the TUI state
 type Model struct {
@@ -34,21 +109,94 @@ type Model struct {
 	height    int
 	quitting  bool
 
+	// Layout state
+	sidebarVisible bool
+	sidebarWidth   int
+
 	// Data for display
-	daemonStatus string
-	daemonPID    int
-	soldatiCount int
-	beadsCount   int
-	turfsCount   int
+	daemonStatus     string
+	daemonPID        int
+	sessionStartTime time.Time
+	currentModel     string
+
+	// Beads by status (for sidebar)
+	beadsInProgress int
+	beadsOpen       int
+	beadsClosed     int
+
+	// Active soldati (for sidebar)
+	activeSoldati []SoldatiStatus
+
+	// Chat state
+	chatInput       textinput.Model
+	chatViewport    viewport.Model
+	chatMessages    []ChatMessage
+	chatWaiting     bool
+	chatError       string
+	currentBlocks   []agent.ChatContentBlock // Blocks being streamed
+	underboss       *underboss.Underboss
+	mobDir          string
 }
 
 // New creates a new TUI model
 func New() Model {
+	home, _ := os.UserHomeDir()
+	mobDir := filepath.Join(home, "mob")
+
+	// Initialize text input - minimal style
+	ti := textinput.New()
+	ti.Placeholder = "Type a message..."
+	ti.CharLimit = 2000
+	ti.Width = 80
+
+	// Initialize viewport for chat history
+	vp := viewport.New(80, 10)
+
+	// Initialize underboss
+	spawner := agent.NewSpawner()
+	ub := underboss.New(mobDir, spawner)
+
 	m := Model{
-		daemonStatus: "unknown",
+		activeTab:        tabChat, // Chat-first
+		sidebarVisible:   true,
+		sidebarWidth:     sidebarWidthConst,
+		sessionStartTime: time.Now(),
+		daemonStatus:     "unknown",
+		chatInput:        ti,
+		chatViewport:     vp,
+		chatMessages:     []ChatMessage{},
+		currentBlocks:    []agent.ChatContentBlock{},
+		underboss:        ub,
+		mobDir:           mobDir,
 	}
 	m.loadData()
 	return m
+}
+
+// updateLayout calculates layout dimensions based on sidebar visibility
+func (m *Model) updateLayout() {
+	// Determine if sidebar should be visible based on width
+	if m.width < minWidthForSidebar {
+		m.sidebarVisible = false
+		m.sidebarWidth = 0
+	} else if m.sidebarVisible {
+		m.sidebarWidth = sidebarWidthConst
+	} else {
+		m.sidebarWidth = 0
+	}
+
+	// Calculate main content width
+	mainWidth := m.width - m.sidebarWidth - 4 // 4 for padding/borders
+	if mainWidth < 40 {
+		mainWidth = 40
+	}
+
+	// Update viewport dimensions
+	m.chatViewport.Width = mainWidth - 4
+	m.chatViewport.Height = m.height - 12
+
+	// Update input width
+	m.chatInput.Width = mainWidth - 8
 }
 
 // loadData fetches current state from the various managers
@@ -67,28 +215,44 @@ func (m *Model) loadData() {
 		m.daemonPID = pid
 	}
 
-	// Count soldati
+	// Beads by status (for sidebar)
+	beadsStore, err := storage.NewBeadStore(filepath.Join(mobDir, "beads"))
+	if err == nil {
+		allBeads, err := beadsStore.List(storage.BeadFilter{})
+		if err == nil {
+			m.beadsOpen = 0
+			m.beadsInProgress = 0
+			m.beadsClosed = 0
+			for _, b := range allBeads {
+				switch b.Status {
+				case models.BeadStatusOpen:
+					m.beadsOpen++
+				case models.BeadStatusInProgress:
+					m.beadsInProgress++
+				case models.BeadStatusClosed:
+					m.beadsClosed++
+				}
+			}
+		}
+	}
+
+	// Soldati list (for sidebar)
 	soldatiMgr, err := soldati.NewManager(filepath.Join(mobDir, "soldati"))
 	if err == nil {
 		list, err := soldatiMgr.List()
 		if err == nil {
-			m.soldatiCount = len(list)
+			m.activeSoldati = make([]SoldatiStatus, 0, len(list))
+			for _, s := range list {
+				status := "idle"
+				if time.Since(s.LastActive) < 5*time.Minute {
+					status = "active"
+				}
+				m.activeSoldati = append(m.activeSoldati, SoldatiStatus{
+					Name:   s.Name,
+					Status: status,
+				})
+			}
 		}
-	}
-
-	// Count beads
-	beadsStore, err := storage.NewBeadStore(filepath.Join(mobDir, "beads"))
-	if err == nil {
-		beads, err := beadsStore.List(storage.BeadFilter{})
-		if err == nil {
-			m.beadsCount = len(beads)
-		}
-	}
-
-	// Count turfs
-	turfMgr, err := turf.NewManager(filepath.Join(mobDir, "turfs.toml"))
-	if err == nil {
-		m.turfsCount = len(turfMgr.List())
 	}
 }
 
@@ -97,30 +261,212 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
 	switch msg := msg.(type) {
+	case chatResponseMsg:
+		m.chatWaiting = false
+		if msg.err != nil {
+			m.chatError = msg.err.Error()
+		} else {
+			// Add assistant message with full response
+			m.chatMessages = append(m.chatMessages, ChatMessage{
+				Role:       "assistant",
+				Blocks:     msg.response.Blocks,
+				Model:      msg.response.Model,
+				DurationMs: msg.response.DurationMs,
+				Timestamp:  time.Now(),
+			})
+			m.chatError = ""
+			m.currentBlocks = nil
+		}
+		m.updateChatViewport()
+		return m, nil
+
+	case streamUpdateMsg:
+		// Update current streaming blocks - replace or append based on block index
+		m.updateStreamingBlock(msg.block)
+		m.updateChatViewport()
+		// Continue listening for more updates
+		return m, listenForStreamUpdates()
+
+	case streamDoneMsg:
+		// Streaming complete - finalize the message
+		m.chatWaiting = false
+		if msg.err != nil {
+			m.chatError = msg.err.Error()
+		} else if msg.response != nil {
+			// Add assistant message with full response
+			m.chatMessages = append(m.chatMessages, ChatMessage{
+				Role:       "assistant",
+				Blocks:     msg.response.Blocks,
+				Model:      msg.response.Model,
+				DurationMs: msg.response.DurationMs,
+				Timestamp:  time.Now(),
+			})
+			m.chatError = ""
+		}
+		m.currentBlocks = nil
+		m.updateChatViewport()
+		return m, nil
+
 	case tea.KeyMsg:
+		// Handle chat input when on chat tab
+		if m.activeTab == tabChat && m.chatInput.Focused() {
+			switch msg.String() {
+			case "ctrl+c":
+				m.quitting = true
+				return m, tea.Quit
+			case "esc":
+				m.chatInput.Blur()
+				return m, nil
+			case "enter":
+				if !m.chatWaiting && m.chatInput.Value() != "" {
+					return m, m.sendMessage()
+				}
+				return m, nil
+			}
+			// Update text input
+			var cmd tea.Cmd
+			m.chatInput, cmd = m.chatInput.Update(msg)
+			return m, cmd
+		}
+
+		// Normal navigation when not typing
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
 		case "tab", "right", "l":
 			m.activeTab = (m.activeTab + 1) % tab(len(tabNames))
+			m.updateFocus()
 		case "shift+tab", "left", "h":
 			m.activeTab = (m.activeTab - 1 + tab(len(tabNames))) % tab(len(tabNames))
+			m.updateFocus()
 		case "1":
-			m.activeTab = tabDashboard
+			m.activeTab = tabChat
+			m.updateFocus()
 		case "2":
-			m.activeTab = tabAgents
-		case "3":
-			m.activeTab = tabBeads
-		case "4":
 			m.activeTab = tabLogs
+			m.updateFocus()
+		case "s":
+			// Toggle sidebar (only if terminal is wide enough)
+			if m.width >= minWidthForSidebar {
+				m.sidebarVisible = !m.sidebarVisible
+				m.updateLayout()
+			}
+		case "i", "enter":
+			if m.activeTab == tabChat && !m.chatWaiting {
+				m.chatInput.Focus()
+				return m, textinput.Blink
+			}
 		}
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.updateLayout()
+		m.updateChatViewport()
 	}
-	return m, nil
+
+	// Update viewport for scrolling
+	var cmd tea.Cmd
+	m.chatViewport, cmd = m.chatViewport.Update(msg)
+	cmds = append(cmds, cmd)
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m *Model) updateFocus() {
+	if m.activeTab == tabChat {
+		m.chatInput.Focus()
+	} else {
+		m.chatInput.Blur()
+	}
+}
+
+func (m *Model) updateStreamingBlock(block agent.ChatContentBlock) {
+	// Find existing block by index and update it, or append new one
+	for i, existing := range m.currentBlocks {
+		if existing.Index == block.Index {
+			m.currentBlocks[i] = block
+			return
+		}
+	}
+	// New block, append it
+	m.currentBlocks = append(m.currentBlocks, block)
+}
+
+func (m *Model) sendMessage() tea.Cmd {
+	message := m.chatInput.Value()
+	m.chatInput.SetValue("")
+
+	// Add user message to history
+	m.chatMessages = append(m.chatMessages, ChatMessage{
+		Role:      "user",
+		Content:   message,
+		Timestamp: time.Now(),
+	})
+	m.chatWaiting = true
+	m.currentBlocks = nil
+	m.updateChatViewport()
+
+	// Create streaming state
+	activeStream = &streamState{
+		blockChan:    make(chan agent.ChatContentBlock, 100),
+		responseChan: make(chan streamDoneMsg, 1),
+	}
+
+	// Start streaming request in background
+	go func() {
+		stream := activeStream
+		callback := func(block agent.ChatContentBlock) {
+			if stream != nil && stream.blockChan != nil {
+				stream.blockChan <- block
+			}
+		}
+		resp, err := m.underboss.AskStream(context.Background(), message, callback)
+		if stream != nil {
+			close(stream.blockChan)
+			stream.responseChan <- streamDoneMsg{response: resp, err: err}
+			close(stream.responseChan)
+		}
+	}()
+
+	// Return command to listen for stream updates
+	return listenForStreamUpdates()
+}
+
+// listenForStreamUpdates returns a command that waits for the next stream update
+func listenForStreamUpdates() tea.Cmd {
+	return func() tea.Msg {
+		if activeStream == nil {
+			return nil
+		}
+
+		// Try to read from block channel first
+		select {
+		case block, ok := <-activeStream.blockChan:
+			if ok {
+				return streamUpdateMsg{block: block}
+			}
+			// Block channel closed, wait for final response
+			select {
+			case done := <-activeStream.responseChan:
+				activeStream = nil
+				return done
+			}
+		case done := <-activeStream.responseChan:
+			activeStream = nil
+			return done
+		}
+	}
+}
+
+func (m *Model) updateChatViewport() {
+	content := m.renderChatHistory()
+	m.chatViewport.SetContent(content)
+	m.chatViewport.GotoBottom()
 }
 
 func (m Model) View() string {
@@ -128,93 +474,549 @@ func (m Model) View() string {
 		return ""
 	}
 
+	// Calculate main content width
+	mainWidth := m.width - m.sidebarWidth - 8 // padding
+	if mainWidth < 40 {
+		mainWidth = 40
+	}
+
+	// Build main area (tabs + content)
+	mainArea := m.renderMainArea(mainWidth)
+
+	// Build full content with optional sidebar
+	var content string
+	if m.sidebarVisible && m.sidebarWidth > 0 {
+		sidebar := m.renderSidebar()
+		content = lipgloss.JoinHorizontal(lipgloss.Top, mainArea, sidebar)
+	} else {
+		content = mainArea
+	}
+
+	// Add help footer
+	var b strings.Builder
+	b.WriteString(content)
+	b.WriteString("\n")
+	b.WriteString(m.renderHelp())
+
+	// Add padding around the whole app
+	padded := lipgloss.NewStyle().
+		Padding(1, 2).
+		Render(b.String())
+
+	return m.fillBackground(padded)
+}
+
+func (m Model) renderMainArea(width int) string {
 	var b strings.Builder
 
-	// Title
-	title := titleStyle.Render("MOB - Agent Orchestrator")
-	b.WriteString(title)
-	b.WriteString("\n\n")
-
-	// Tab bar
+	// Tab bar at top
 	b.WriteString(m.renderTabBar())
-	b.WriteString("\n\n")
+	b.WriteString("\n")
 
-	// Content area
-	content := m.renderContent()
-	b.WriteString(content)
-	b.WriteString("\n\n")
+	// Content area based on active tab
+	switch m.activeTab {
+	case tabChat:
+		b.WriteString(m.renderChat())
+	case tabLogs:
+		b.WriteString(m.renderLogs())
+	}
 
-	// Help text
-	help := helpStyle.Render("tab/arrows: switch tabs | 1-4: jump to tab | q: quit")
-	b.WriteString(help)
+	return lipgloss.NewStyle().
+		Width(width).
+		Render(b.String())
+}
 
-	return b.String()
+func (m Model) fillBackground(content string) string {
+	if m.width == 0 || m.height == 0 {
+		return content
+	}
+
+	fullScreen := lipgloss.NewStyle().
+		Width(m.width).
+		Height(m.height).
+		Background(bgColor)
+
+	return fullScreen.Render(content)
 }
 
 func (m Model) renderTabBar() string {
 	var tabs []string
 
 	for i, name := range tabNames {
-		var style lipgloss.Style
 		if tab(i) == m.activeTab {
-			style = activeTabStyle
+			tabs = append(tabs, activeTabStyle.Render(name))
 		} else {
-			style = inactiveTabStyle
+			tabs = append(tabs, inactiveTabStyle.Render(name))
 		}
-		tabs = append(tabs, style.Render(fmt.Sprintf("[%d] %s", i+1, name)))
 	}
 
-	return tabBarStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, tabs...))
+	inner := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
+	box := selectorBarStyle.Render(inner)
+	lines := strings.Count(box, "\n") + 1
+	accent := accentBarStyle.Render(strings.Repeat("▌\n", lines-1) + "▌")
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, accent, box)
 }
 
-func (m Model) renderContent() string {
-	var content string
+// renderSidebar renders the right sidebar with status info
+func (m Model) renderSidebar() string {
+	width := m.sidebarWidth - 4 // padding
 
-	switch m.activeTab {
-	case tabDashboard:
-		content = m.renderDashboard()
-	case tabAgents:
-		content = m.renderAgents()
-	case tabBeads:
-		content = m.renderBeads()
-	case tabLogs:
-		content = m.renderLogs()
-	}
-
-	return contentStyle.Render(content)
-}
-
-func (m Model) renderDashboard() string {
 	var b strings.Builder
 
+	// Status section
+	b.WriteString(m.renderSidebarStatus(width))
+	b.WriteString("\n\n")
+
+	// Beads section
+	b.WriteString(m.renderSidebarBeads(width))
+	b.WriteString("\n\n")
+
+	// Agents section
+	b.WriteString(m.renderSidebarAgents(width))
+
+	// Sidebar container with left border
+	return lipgloss.NewStyle().
+		Width(m.sidebarWidth).
+		Height(m.height - 6).
+		Padding(1, 2).
+		Background(bgPanelColor).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderLeft(true).
+		BorderForeground(borderSubtleColor).
+		Render(b.String())
+}
+
+func (m Model) renderSidebarStatus(width int) string {
+	var b strings.Builder
+
+	// Section header
+	b.WriteString(sidebarHeaderStyle.Render("┃ Status"))
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render(strings.Repeat("─", width)))
+	b.WriteString("\n")
+
 	// Daemon status
-	daemonLabel := "Daemon: "
+	daemonLabel := labelStyle.Render("Daemon")
 	var daemonValue string
 	if m.daemonStatus == "running" {
-		daemonValue = statusStyle.Render(fmt.Sprintf("%s (PID %d)", m.daemonStatus, m.daemonPID))
+		daemonValue = valueStyle.Render(fmt.Sprintf("running (%d)", m.daemonPID))
 	} else {
-		daemonValue = mutedStyle.Render(m.daemonStatus)
+		daemonValue = statusInactiveStyle.Render(m.daemonStatus)
 	}
-	b.WriteString(daemonLabel + daemonValue + "\n")
+	b.WriteString(fmt.Sprintf("%s  %s\n", daemonLabel, daemonValue))
 
-	// Counts
-	b.WriteString(fmt.Sprintf("Soldati: %s\n", statusStyle.Render(fmt.Sprintf("%d", m.soldatiCount))))
-	b.WriteString(fmt.Sprintf("Beads:   %s\n", statusStyle.Render(fmt.Sprintf("%d", m.beadsCount))))
-	b.WriteString(fmt.Sprintf("Turfs:   %s\n", statusStyle.Render(fmt.Sprintf("%d", m.turfsCount))))
+	// Model (if known)
+	if m.currentModel != "" {
+		b.WriteString(fmt.Sprintf("%s   %s\n",
+			labelStyle.Render("Model"),
+			valueStyle.Render(formatModelName(m.currentModel))))
+	}
+
+	// Session duration
+	duration := time.Since(m.sessionStartTime)
+	b.WriteString(fmt.Sprintf("%s %s\n",
+		labelStyle.Render("Session"),
+		valueStyle.Render(formatDuration(duration))))
 
 	return b.String()
 }
 
-func (m Model) renderAgents() string {
-	return mutedStyle.Render("No active agents.")
+func (m Model) renderSidebarBeads(width int) string {
+	var b strings.Builder
+
+	b.WriteString(sidebarHeaderStyle.Render("┃ Beads"))
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render(strings.Repeat("─", width)))
+	b.WriteString("\n")
+
+	totalBeads := m.beadsInProgress + m.beadsOpen + m.beadsClosed
+
+	if totalBeads == 0 {
+		b.WriteString(mutedStyle.Render("No beads"))
+	} else {
+		if m.beadsInProgress > 0 {
+			b.WriteString(fmt.Sprintf("%s %d in progress\n",
+				lipgloss.NewStyle().Foreground(primaryColor).Render("●"),
+				m.beadsInProgress))
+		}
+		if m.beadsOpen > 0 {
+			b.WriteString(fmt.Sprintf("%s %d open\n",
+				lipgloss.NewStyle().Foreground(textMutedColor).Render("○"),
+				m.beadsOpen))
+		}
+		if m.beadsClosed > 0 {
+			b.WriteString(fmt.Sprintf("%s %d closed\n",
+				lipgloss.NewStyle().Foreground(successColor).Render("✓"),
+				m.beadsClosed))
+		}
+	}
+
+	return b.String()
 }
 
-func (m Model) renderBeads() string {
-	return mutedStyle.Render("No beads.")
+func (m Model) renderSidebarAgents(width int) string {
+	var b strings.Builder
+
+	b.WriteString(sidebarHeaderStyle.Render("┃ Agents"))
+	b.WriteString("\n")
+	b.WriteString(mutedStyle.Render(strings.Repeat("─", width)))
+	b.WriteString("\n")
+
+	if len(m.activeSoldati) == 0 {
+		b.WriteString(mutedStyle.Render("No agents"))
+	} else {
+		for _, s := range m.activeSoldati {
+			statusColor := textMutedColor
+			if s.Status == "active" {
+				statusColor = successColor
+			}
+			b.WriteString(fmt.Sprintf("%s  %s\n",
+				labelStyle.Render(s.Name),
+				lipgloss.NewStyle().Foreground(statusColor).Render(s.Status)))
+		}
+	}
+
+	return b.String()
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
 func (m Model) renderLogs() string {
-	return mutedStyle.Render("No logs yet.")
+	return mutedStyle.Render("No logs yet")
+}
+
+func (m Model) renderChat() string {
+	var b strings.Builder
+
+	// Chat history viewport
+	b.WriteString(m.chatViewport.View())
+	b.WriteString("\n")
+
+	// Status/error line
+	if m.chatWaiting {
+		b.WriteString(mutedStyle.Render("  Thinking..."))
+		b.WriteString("\n")
+	} else if m.chatError != "" {
+		b.WriteString(errorStyle.Render("  Error: " + m.chatError))
+		b.WriteString("\n")
+	}
+
+	// Calculate input width based on main area
+	inputWidth := m.width - m.sidebarWidth - 16
+	if inputWidth < 30 {
+		inputWidth = 30
+	}
+
+	// Input area - minimal style with accent bar
+	inputAccent := accentBarStyle.Render("▌")
+	inputBox := lipgloss.NewStyle().
+		Background(bgPanelColor).
+		Padding(0, 1).
+		Width(inputWidth).
+		Render(m.chatInput.View())
+
+	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, inputAccent, inputBox))
+
+	return b.String()
+}
+
+func (m Model) renderChatHistory() string {
+	if len(m.chatMessages) == 0 && !m.chatWaiting {
+		return mutedStyle.Render("Start a conversation with the Underboss...")
+	}
+
+	var b strings.Builder
+	width := m.chatViewport.Width - 4
+
+	for _, msg := range m.chatMessages {
+		if msg.Role == "user" {
+			// User message with blue left accent bar
+			b.WriteString(m.renderUserMessage(msg.Content, width))
+			b.WriteString("\n\n")
+		} else {
+			// Assistant message with thinking, tool use, and text
+			b.WriteString(m.renderAssistantMessage(msg, width))
+			b.WriteString("\n")
+		}
+	}
+
+	// Show current streaming blocks if waiting
+	if m.chatWaiting && len(m.currentBlocks) > 0 {
+		for _, block := range m.currentBlocks {
+			b.WriteString(m.renderContentBlock(block, width))
+		}
+	}
+
+	return b.String()
+}
+
+func (m Model) renderUserMessage(content string, width int) string {
+	// Box-drawing border on the left (OpenCode style)
+	border := lipgloss.NewStyle().
+		Foreground(secondaryColor).
+		Render("┃")
+
+	// Message content in white bold
+	lines := strings.Split(wrapText(content, width-4), "\n")
+	var b strings.Builder
+	for _, line := range lines {
+		b.WriteString(fmt.Sprintf("%s %s\n", border,
+			lipgloss.NewStyle().Foreground(textColor).Bold(true).Render(line)))
+	}
+
+	return b.String()
+}
+
+func (m Model) renderAssistantMessage(msg ChatMessage, width int) string {
+	var b strings.Builder
+
+	for _, block := range msg.Blocks {
+		b.WriteString(m.renderContentBlock(block, width))
+	}
+
+	// Footer with model and timing
+	if msg.Model != "" || msg.DurationMs > 0 {
+		footer := fmt.Sprintf("■ %s · %.1fs",
+			formatModelName(msg.Model),
+			float64(msg.DurationMs)/1000.0)
+		b.WriteString(mutedStyle.Render(footer))
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) string {
+	var b strings.Builder
+
+	// Box-drawing border character
+	borderChar := "┃"
+
+	switch block.Type {
+	case agent.ContentTypeThinking:
+		// Thinking block with orange border
+		border := lipgloss.NewStyle().
+			Foreground(primaryColor).
+			Render(borderChar)
+
+		// Header: icon + "Thinking" or summary
+		header := iconThink + " "
+		if block.Summary != "" {
+			header += block.Summary
+		} else {
+			header += "Thinking..."
+		}
+		headerStyled := lipgloss.NewStyle().
+			Foreground(primaryColor).
+			Italic(true).
+			Render(header)
+
+		b.WriteString(fmt.Sprintf("%s %s\n", border, headerStyled))
+
+		// Thinking content (muted, wrapped)
+		if block.Text != "" {
+			lines := strings.Split(wrapText(block.Text, width-4), "\n")
+			for _, line := range lines {
+				b.WriteString(fmt.Sprintf("%s   %s\n", border, mutedStyle.Render(line)))
+			}
+		}
+		b.WriteString(border + "\n") // Empty border line for spacing
+
+	case agent.ContentTypeToolUse:
+		// Tool use with appropriate icon
+		border := lipgloss.NewStyle().
+			Foreground(secondaryColor).
+			Render(borderChar)
+
+		// Get tool icon
+		icon := toolIcons[block.Name]
+		if icon == "" {
+			icon = "⊛" // Default tool icon
+		}
+
+		// Tool header: icon + tool name
+		toolHeader := fmt.Sprintf("%s %s", icon, block.Name)
+		headerStyled := lipgloss.NewStyle().
+			Foreground(secondaryColor).
+			Render(toolHeader)
+
+		b.WriteString(fmt.Sprintf("%s %s\n", border, headerStyled))
+
+		// Extract and display description from input
+		desc := extractToolDescription(block.Input)
+		if desc != "" {
+			// Truncate if too long
+			if len(desc) > width-6 {
+				desc = desc[:width-9] + "..."
+			}
+			b.WriteString(fmt.Sprintf("%s   %s\n", border, mutedStyle.Render(desc)))
+		}
+		b.WriteString(border + "\n")
+
+	case agent.ContentTypeText:
+		// Main response text with subtle border
+		border := lipgloss.NewStyle().
+			Foreground(textMutedColor).
+			Render(borderChar)
+
+		lines := strings.Split(wrapText(block.Text, width-4), "\n")
+		for _, line := range lines {
+			b.WriteString(fmt.Sprintf("%s %s\n", border,
+				lipgloss.NewStyle().Foreground(textColor).Render(line)))
+		}
+	}
+
+	return b.String()
+}
+
+func extractToolDescription(input string) string {
+	var toolInfo struct {
+		Description string `json:"description"`
+		Prompt      string `json:"prompt"`
+		Command     string `json:"command"`
+		FilePath    string `json:"file_path"`
+		Pattern     string `json:"pattern"`
+	}
+	if input != "" {
+		json.Unmarshal([]byte(input), &toolInfo)
+	}
+
+	// Priority: description > prompt > command > file_path > pattern
+	if toolInfo.Description != "" {
+		return toolInfo.Description
+	}
+	if toolInfo.Prompt != "" {
+		return toolInfo.Prompt
+	}
+	if toolInfo.Command != "" {
+		return toolInfo.Command
+	}
+	if toolInfo.FilePath != "" {
+		return toolInfo.FilePath
+	}
+	if toolInfo.Pattern != "" {
+		return toolInfo.Pattern
+	}
+	return ""
+}
+
+func formatModelName(model string) string {
+	// Shorten model names for display
+	if strings.Contains(model, "opus") {
+		return "opus"
+	}
+	if strings.Contains(model, "sonnet") {
+		return "sonnet"
+	}
+	if strings.Contains(model, "haiku") {
+		return "haiku"
+	}
+	if model == "" {
+		return "claude"
+	}
+	// Return last part of model name
+	parts := strings.Split(model, "-")
+	if len(parts) > 1 {
+		return parts[len(parts)-2]
+	}
+	return model
+}
+
+func wrapText(text string, width int) string {
+	if width <= 0 {
+		width = 80
+	}
+
+	var result strings.Builder
+	lines := strings.Split(text, "\n")
+
+	for i, line := range lines {
+		if i > 0 {
+			result.WriteString("\n")
+		}
+
+		words := strings.Fields(line)
+		lineLen := 0
+
+		for j, word := range words {
+			wordLen := len(word)
+
+			if lineLen+wordLen+1 > width && lineLen > 0 {
+				result.WriteString("\n")
+				lineLen = 0
+			}
+
+			if lineLen > 0 {
+				result.WriteString(" ")
+				lineLen++
+			}
+
+			result.WriteString(word)
+			lineLen += wordLen
+
+			_ = j // Suppress unused variable warning
+		}
+	}
+
+	return result.String()
+}
+
+func (m Model) renderHelp() string {
+	items := []struct {
+		key  string
+		desc string
+	}{
+		{"tab", "navigate"},
+		{"1-2", "jump"},
+	}
+
+	// Add sidebar toggle if terminal is wide enough
+	if m.width >= minWidthForSidebar {
+		items = append(items, struct {
+			key  string
+			desc string
+		}{"s", "sidebar"})
+	}
+
+	items = append(items, struct {
+		key  string
+		desc string
+	}{"q", "quit"})
+
+	if m.activeTab == tabChat {
+		if m.chatInput.Focused() {
+			items = []struct {
+				key  string
+				desc string
+			}{
+				{"enter", "send"},
+				{"esc", "cancel"},
+			}
+		} else {
+			items = append(items, struct {
+				key  string
+				desc string
+			}{"i", "type"})
+		}
+	}
+
+	var parts []string
+	for _, item := range items {
+		parts = append(parts, fmt.Sprintf("%s %s",
+			keyStyle.Render(item.key),
+			keyDescStyle.Render(item.desc)))
+	}
+
+	return strings.Join(parts, "    ")
 }
 
 // Run starts the TUI application

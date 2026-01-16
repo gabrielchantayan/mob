@@ -1,11 +1,14 @@
 package agent
 
 import (
-	"os/exec"
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"strings"
 	"sync"
 	"time"
-
-	"github.com/gabe/mob/internal/ipc"
 )
 
 // AgentType represents the type of agent
@@ -17,75 +20,364 @@ const (
 	AgentTypeAssociate AgentType = "associate"
 )
 
-// Agent represents a running Claude Code instance
+// Agent represents a Claude Code agent that can send messages
+// Uses per-call spawning with --resume for session continuity
 type Agent struct {
-	ID        string
-	Type      AgentType
-	Name      string      // e.g., "vinnie" for soldati
-	Turf      string      // project this agent works on
-	Cmd       *exec.Cmd
-	Client    *ipc.Client // JSON-RPC client
-	StartedAt time.Time
-	mu        sync.Mutex
+	ID           string
+	Type         AgentType
+	Name         string    // e.g., "vinnie" for soldati
+	Turf         string    // project this agent works on
+	WorkDir      string    // working directory for Claude
+	StartedAt    time.Time
+	SessionID    string    // Claude session ID for --resume
+	SystemPrompt string    // System prompt injected on first call
+	MCPConfig    string    // Path to MCP config JSON file
+	spawner      *Spawner
+	mu           sync.Mutex
 }
 
-// Send sends a message to the agent (notification, no response expected)
+// ContentBlockType represents the type of content in a response
+type ContentBlockType string
+
+const (
+	ContentTypeText     ContentBlockType = "text"
+	ContentTypeThinking ContentBlockType = "thinking"
+	ContentTypeToolUse  ContentBlockType = "tool_use"
+	ContentTypeToolResult ContentBlockType = "tool_result"
+)
+
+// ChatContentBlock represents a piece of content in a chat response
+type ChatContentBlock struct {
+	Type    ContentBlockType
+	Text    string // For text and thinking
+	Name    string // For tool_use (tool name)
+	Input   string // For tool_use (tool input as string)
+	ID      string // For tool_use (tool_use_id)
+	Summary string // For thinking (summary header)
+	Index   int    // Block index for streaming updates
+}
+
+// ChatResponse represents a complete response from Claude
+type ChatResponse struct {
+	Blocks      []ChatContentBlock
+	SessionID   string
+	Model       string
+	DurationMs  int64
+	TotalCost   float64
+	InputTokens int
+	OutputTokens int
+}
+
+// GetText returns all text content concatenated
+func (r *ChatResponse) GetText() string {
+	var parts []string
+	for _, b := range r.Blocks {
+		if b.Type == ContentTypeText {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, "")
+}
+
+// StreamCallback is called for each content update during streaming
+type StreamCallback func(block ChatContentBlock)
+
+// StreamMessage represents a message in Claude's stream-json output
+type StreamMessage struct {
+	Type      string          `json:"type"`
+	Subtype   string          `json:"subtype,omitempty"`
+	SessionID string          `json:"session_id,omitempty"`
+	Message   *ClaudeMessage  `json:"message,omitempty"`
+	Event     *StreamEvent    `json:"event,omitempty"`
+	Result    string          `json:"result,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
+	DurationMs int64          `json:"duration_ms,omitempty"`
+	TotalCostUSD float64      `json:"total_cost_usd,omitempty"`
+	Usage     *UsageInfo      `json:"usage,omitempty"`
+}
+
+// StreamEvent represents streaming events
+type StreamEvent struct {
+	Type         string       `json:"type"`
+	Index        int          `json:"index,omitempty"`
+	ContentBlock *ContentBlock `json:"content_block,omitempty"`
+	Delta        *ContentDelta `json:"delta,omitempty"`
+}
+
+// ContentDelta represents incremental content updates
+type ContentDelta struct {
+	Type    string `json:"type"`
+	Text    string `json:"text,omitempty"`
+	Summary string `json:"summary,omitempty"`
+}
+
+// ClaudeMessage represents the message field in assistant responses
+type ClaudeMessage struct {
+	Model   string         `json:"model,omitempty"`
+	Content []ContentBlock `json:"content,omitempty"`
+}
+
+// ContentBlock represents a content block in Claude's response
+type ContentBlock struct {
+	Type    string                 `json:"type"`
+	Text    string                 `json:"text,omitempty"`
+	Name    string                 `json:"name,omitempty"`
+	ID      string                 `json:"id,omitempty"`
+	Input   map[string]interface{} `json:"input,omitempty"`
+	Summary string                 `json:"summary,omitempty"`
+}
+
+// UsageInfo represents token usage
+type UsageInfo struct {
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
+}
+
+// Chat sends a message to Claude and returns the response
+// Uses Claude's stream-json protocol with per-call spawning
+func (a *Agent) Chat(message string) (*ChatResponse, error) {
+	return a.ChatStream(message, nil)
+}
+
+// ChatStream sends a message and calls the callback for each content update
+func (a *Agent) ChatStream(message string, callback StreamCallback) (*ChatResponse, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Build command args
+	args := []string{
+		"--dangerously-skip-permissions",
+		"-p",
+		"--verbose",
+		"--output-format", "stream-json",
+		"--input-format", "stream-json",
+	}
+
+	// Add streaming for real-time updates
+	if callback != nil {
+		args = append(args, "--include-partial-messages")
+	}
+
+	// Add system prompt on first call only (before session exists)
+	if a.SessionID == "" && a.SystemPrompt != "" {
+		args = append(args, "--system-prompt", a.SystemPrompt)
+	}
+
+	// Add MCP config if configured
+	if a.MCPConfig != "" {
+		args = append(args, "--mcp-config", a.MCPConfig)
+	}
+
+	// Add --resume if we have a session ID
+	if a.SessionID != "" {
+		args = append(args, "--resume", a.SessionID)
+	}
+
+	// Create the command
+	cmd := a.spawner.commandCreator(a.spawner.claudePath, args...)
+	cmd.Dir = a.WorkDir
+
+	// Set up stdin with the message
+	inputMsg := map[string]interface{}{
+		"type": "user",
+		"message": map[string]interface{}{
+			"role":    "user",
+			"content": message,
+		},
+	}
+	inputBytes, err := json.Marshal(inputMsg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal input: %w", err)
+	}
+	cmd.Stdin = bytes.NewReader(append(inputBytes, '\n'))
+
+	// Set up stdout pipe for streaming
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	// Capture stderr
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start claude: %w", err)
+	}
+
+	// Parse streaming output
+	response := &ChatResponse{}
+	currentBlocks := make(map[int]*ChatContentBlock) // Track blocks by index
+
+	scanner := bufio.NewScanner(stdout)
+	// Increase buffer size for large responses
+	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		var msg StreamMessage
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			continue
+		}
+
+		// Capture session ID
+		if msg.SessionID != "" && a.SessionID == "" {
+			a.SessionID = msg.SessionID
+			response.SessionID = msg.SessionID
+		}
+
+		// Handle streaming events
+		if msg.Type == "stream_event" && msg.Event != nil {
+			switch msg.Event.Type {
+			case "content_block_start":
+				if msg.Event.ContentBlock != nil {
+					block := &ChatContentBlock{
+						Index: msg.Event.Index,
+					}
+					switch msg.Event.ContentBlock.Type {
+					case "text":
+						block.Type = ContentTypeText
+					case "thinking":
+						block.Type = ContentTypeThinking
+						block.Summary = msg.Event.ContentBlock.Summary
+					case "tool_use":
+						block.Type = ContentTypeToolUse
+						block.Name = msg.Event.ContentBlock.Name
+						block.ID = msg.Event.ContentBlock.ID
+					}
+					currentBlocks[msg.Event.Index] = block
+					if callback != nil {
+						callback(*block)
+					}
+				}
+
+			case "content_block_delta":
+				if msg.Event.Delta != nil && currentBlocks[msg.Event.Index] != nil {
+					block := currentBlocks[msg.Event.Index]
+					switch msg.Event.Delta.Type {
+					case "text_delta":
+						block.Text += msg.Event.Delta.Text
+					case "thinking_delta":
+						block.Text += msg.Event.Delta.Text
+					case "summary_delta":
+						block.Summary += msg.Event.Delta.Summary
+					case "input_json_delta":
+						block.Input += msg.Event.Delta.Text
+					}
+					if callback != nil {
+						callback(*block)
+					}
+				}
+
+			case "content_block_stop":
+				if block, ok := currentBlocks[msg.Event.Index]; ok {
+					response.Blocks = append(response.Blocks, *block)
+					delete(currentBlocks, msg.Event.Index)
+				}
+			}
+		}
+
+		// Handle final assistant message (non-streaming)
+		if msg.Type == "assistant" && msg.Message != nil {
+			response.Model = msg.Message.Model
+			// If no streaming blocks, extract from final message
+			if len(response.Blocks) == 0 {
+				for _, cb := range msg.Message.Content {
+					block := ChatContentBlock{}
+					switch cb.Type {
+					case "text":
+						block.Type = ContentTypeText
+						block.Text = cb.Text
+					case "thinking":
+						block.Type = ContentTypeThinking
+						block.Text = cb.Text
+						block.Summary = cb.Summary
+					case "tool_use":
+						block.Type = ContentTypeToolUse
+						block.Name = cb.Name
+						block.ID = cb.ID
+						if cb.Input != nil {
+							inputJSON, _ := json.Marshal(cb.Input)
+							block.Input = string(inputJSON)
+						}
+					}
+					response.Blocks = append(response.Blocks, block)
+					if callback != nil {
+						callback(block)
+					}
+				}
+			}
+		}
+
+		// Handle result message
+		if msg.Type == "result" {
+			if msg.IsError {
+				return nil, fmt.Errorf("claude error: %s", msg.Result)
+			}
+			response.DurationMs = msg.DurationMs
+			response.TotalCost = msg.TotalCostUSD
+			if msg.Usage != nil {
+				response.InputTokens = msg.Usage.InputTokens
+				response.OutputTokens = msg.Usage.OutputTokens
+			}
+		}
+	}
+
+	// Wait for command to finish
+	if err := cmd.Wait(); err != nil {
+		return nil, fmt.Errorf("claude command failed: %w (stderr: %s)", err, stderr.String())
+	}
+
+	if len(response.Blocks) == 0 {
+		return nil, fmt.Errorf("no response from claude (stderr: %s)", stderr.String())
+	}
+
+	return response, nil
+}
+
+// Send sends a message (alias for Chat, for compatibility)
 func (a *Agent) Send(method string, params interface{}) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.Client == nil {
-		return ErrAgentNotConnected
+	if p, ok := params.(map[string]interface{}); ok {
+		if msg, ok := p["message"].(string); ok {
+			_, err := a.Chat(msg)
+			return err
+		}
 	}
-	return a.Client.Send(method, params)
+	return fmt.Errorf("invalid params for Send")
 }
 
-// Call sends a request and waits for response
-func (a *Agent) Call(method string, params interface{}) (*ipc.Response, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.Client == nil {
-		return nil, ErrAgentNotConnected
-	}
-	return a.Client.Call(method, params)
+// IsRunning returns true if the agent is available for messages
+func (a *Agent) IsRunning() bool {
+	return a.spawner != nil
 }
 
-// Wait waits for the agent process to complete
-func (a *Agent) Wait() error {
-	if a.Cmd == nil {
-		return ErrAgentNotStarted
-	}
-	return a.Cmd.Wait()
-}
-
-// Kill terminates the agent
+// Kill clears the session (no persistent process to kill)
 func (a *Agent) Kill() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-
-	if a.Cmd == nil || a.Cmd.Process == nil {
-		return ErrAgentNotStarted
-	}
-	return a.Cmd.Process.Kill()
+	a.SessionID = ""
+	return nil
 }
 
-// IsRunning returns true if the agent is still running
-func (a *Agent) IsRunning() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.Cmd == nil || a.Cmd.Process == nil {
-		return false
+// GetTextFromBlocks extracts text from ContentBlocks (legacy helper)
+func GetTextFromBlocks(blocks []ContentBlock) string {
+	var parts []string
+	for _, b := range blocks {
+		if b.Type == "text" {
+			parts = append(parts, b.Text)
+		}
 	}
+	return strings.Join(parts, "")
+}
 
-	// Check if process has exited by checking ProcessState
-	// If ProcessState is nil, process hasn't exited yet
-	if a.Cmd.ProcessState != nil {
-		return false
+// Close implements io.Closer for stdout pipe
+func closeReader(r io.Reader) {
+	if closer, ok := r.(io.Closer); ok {
+		closer.Close()
 	}
-
-	// Double-check by trying to get exit status without blocking
-	// This is a non-blocking check on Unix systems
-	return a.Cmd.ProcessState == nil
 }

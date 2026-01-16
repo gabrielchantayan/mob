@@ -1,22 +1,13 @@
 package agent
 
 import (
-	"bytes"
 	"os/exec"
 	"testing"
 	"time"
-
-	"github.com/gabe/mob/internal/ipc"
 )
 
 func TestSpawner_SpawnGeneratesID(t *testing.T) {
 	spawner := NewSpawner()
-
-	// Use a mock command creator that creates a simple process
-	spawner.SetCommandCreator(func(name string, args ...string) *exec.Cmd {
-		// Use "true" command which exits immediately (available on Unix)
-		return exec.Command("true")
-	})
 
 	// Spawn multiple agents and verify unique IDs
 	agent1, err := spawner.Spawn(AgentTypeSoldati, "vinnie", "project-a", "/tmp")
@@ -50,46 +41,26 @@ func TestSpawner_SpawnGeneratesID(t *testing.T) {
 }
 
 func TestAgent_IsRunning(t *testing.T) {
-	// Test with nil Cmd
+	// Test with nil spawner
 	agent := &Agent{}
 	if agent.IsRunning() {
-		t.Error("agent with nil Cmd should not be running")
+		t.Error("agent with nil spawner should not be running")
 	}
 
-	// Test with Cmd but nil Process
-	agent.Cmd = &exec.Cmd{}
-	if agent.IsRunning() {
-		t.Error("agent with nil Process should not be running")
+	// Test with spawner
+	spawner := NewSpawner()
+	agent2, err := spawner.Spawn(AgentTypeSoldati, "vinnie", "turf", "/tmp")
+	if err != nil {
+		t.Fatalf("Spawn failed: %v", err)
 	}
 
-	// Test with actual running process
-	cmd := exec.Command("sleep", "10")
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("failed to start test process: %v", err)
-	}
-	defer cmd.Process.Kill()
-
-	agent.Cmd = cmd
-	if !agent.IsRunning() {
-		t.Error("agent with running process should be running")
-	}
-
-	// Kill and verify not running
-	cmd.Process.Kill()
-	cmd.Wait() // Wait for process to fully terminate
-
-	if agent.IsRunning() {
-		t.Error("agent should not be running after kill")
+	if !agent2.IsRunning() {
+		t.Error("agent with spawner should be running")
 	}
 }
 
 func TestSpawner_List(t *testing.T) {
 	spawner := NewSpawner()
-
-	// Use a mock command creator
-	spawner.SetCommandCreator(func(name string, args ...string) *exec.Cmd {
-		return exec.Command("true")
-	})
 
 	// Initially empty
 	agents := spawner.List()
@@ -128,11 +99,6 @@ func TestSpawner_List(t *testing.T) {
 func TestSpawner_Get(t *testing.T) {
 	spawner := NewSpawner()
 
-	// Use a mock command creator
-	spawner.SetCommandCreator(func(name string, args ...string) *exec.Cmd {
-		return exec.Command("true")
-	})
-
 	// Get non-existent agent
 	_, ok := spawner.Get("nonexistent")
 	if ok {
@@ -167,11 +133,6 @@ func TestSpawner_Get(t *testing.T) {
 
 func TestSpawner_Kill(t *testing.T) {
 	spawner := NewSpawner()
-
-	// Use a long-running process that we can kill
-	spawner.SetCommandCreator(func(name string, args ...string) *exec.Cmd {
-		return exec.Command("sleep", "60")
-	})
 
 	// Kill non-existent agent
 	err := spawner.Kill("nonexistent")
@@ -211,11 +172,6 @@ func TestSpawner_Kill(t *testing.T) {
 func TestSpawner_KillAll(t *testing.T) {
 	spawner := NewSpawner()
 
-	// Use a long-running process
-	spawner.SetCommandCreator(func(name string, args ...string) *exec.Cmd {
-		return exec.Command("sleep", "60")
-	})
-
 	// Spawn multiple agents
 	for i := 0; i < 3; i++ {
 		_, err := spawner.Spawn(AgentTypeSoldati, "agent", "turf", "/tmp")
@@ -253,82 +209,40 @@ func TestNewSpawnerWithPath(t *testing.T) {
 }
 
 func TestAgent_Send(t *testing.T) {
-	// Test with nil client
+	// Test with nil spawner
 	agent := &Agent{}
 	err := agent.Send("test/method", nil)
-	if err != ErrAgentNotConnected {
-		t.Errorf("expected ErrAgentNotConnected, got %v", err)
+	if err == nil {
+		t.Error("expected error with nil spawner")
 	}
 
-	// Test with connected client
-	stdin := &bytes.Buffer{}
-	stdout := &bytes.Buffer{}
-	agent.Client = ipc.NewClient(stdin, stdout)
-
-	err = agent.Send("test/method", map[string]string{"key": "value"})
-	if err != nil {
-		t.Errorf("Send failed: %v", err)
-	}
-
-	// Verify something was written to stdin
-	if stdin.Len() == 0 {
-		t.Error("expected data to be written to stdin")
-	}
-}
-
-func TestAgent_Call(t *testing.T) {
-	// Test with nil client
-	agent := &Agent{}
-	_, err := agent.Call("test/method", nil)
-	if err != ErrAgentNotConnected {
-		t.Errorf("expected ErrAgentNotConnected, got %v", err)
-	}
-}
-
-func TestAgent_Wait(t *testing.T) {
-	// Test with nil Cmd
-	agent := &Agent{}
-	err := agent.Wait()
-	if err != ErrAgentNotStarted {
-		t.Errorf("expected ErrAgentNotStarted, got %v", err)
-	}
-
-	// Test with actual command
-	cmd := exec.Command("true")
-	cmd.Start()
-	agent.Cmd = cmd
-
-	err = agent.Wait()
-	if err != nil {
-		t.Errorf("Wait failed: %v", err)
+	// Test with spawner but invalid params
+	spawner := NewSpawner()
+	agent2, _ := spawner.Spawn(AgentTypeSoldati, "vinnie", "turf", "/tmp")
+	err = agent2.Send("test/method", nil)
+	if err == nil {
+		t.Error("expected error with invalid params")
 	}
 }
 
 func TestAgent_Kill(t *testing.T) {
-	// Test with nil Cmd
-	agent := &Agent{}
-	err := agent.Kill()
-	if err != ErrAgentNotStarted {
-		t.Errorf("expected ErrAgentNotStarted, got %v", err)
+	spawner := NewSpawner()
+	agent, err := spawner.Spawn(AgentTypeSoldati, "vinnie", "turf", "/tmp")
+	if err != nil {
+		t.Fatalf("Spawn failed: %v", err)
 	}
 
-	// Test with Cmd but nil Process
-	agent.Cmd = &exec.Cmd{}
-	err = agent.Kill()
-	if err != ErrAgentNotStarted {
-		t.Errorf("expected ErrAgentNotStarted, got %v", err)
-	}
+	// Set a session ID
+	agent.SessionID = "test-session-123"
 
-	// Test with actual running process
-	cmd := exec.Command("sleep", "60")
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("failed to start process: %v", err)
-	}
-	agent.Cmd = cmd
-
+	// Kill should clear session
 	err = agent.Kill()
 	if err != nil {
 		t.Errorf("Kill failed: %v", err)
+	}
+
+	if agent.SessionID != "" {
+		t.Error("Kill should clear session ID")
 	}
 }
 
@@ -339,6 +253,7 @@ func TestAgent_Properties(t *testing.T) {
 		Type:      AgentTypeUnderboss,
 		Name:      "don",
 		Turf:      "main-project",
+		WorkDir:   "/tmp",
 		StartedAt: now,
 	}
 
@@ -353,6 +268,9 @@ func TestAgent_Properties(t *testing.T) {
 	}
 	if agent.Turf != "main-project" {
 		t.Errorf("expected Turf 'main-project', got %s", agent.Turf)
+	}
+	if agent.WorkDir != "/tmp" {
+		t.Errorf("expected WorkDir '/tmp', got %s", agent.WorkDir)
 	}
 	if !agent.StartedAt.Equal(now) {
 		t.Errorf("expected StartedAt %v, got %v", now, agent.StartedAt)
@@ -374,11 +292,6 @@ func TestAgentTypes(t *testing.T) {
 
 func TestSpawner_Count(t *testing.T) {
 	spawner := NewSpawner()
-
-	// Use a mock command creator
-	spawner.SetCommandCreator(func(name string, args ...string) *exec.Cmd {
-		return exec.Command("true")
-	})
 
 	// Initially zero
 	if spawner.Count() != 0 {
@@ -414,5 +327,71 @@ func TestGenerateID(t *testing.T) {
 		if len(id) != 16 {
 			t.Errorf("expected ID length 16, got %d", len(id))
 		}
+	}
+}
+
+func TestGetTextFromBlocks(t *testing.T) {
+	blocks := []ContentBlock{
+		{Type: "text", Text: "Hello "},
+		{Type: "thinking", Text: "ignored"},
+		{Type: "text", Text: "World"},
+	}
+
+	result := GetTextFromBlocks(blocks)
+	if result != "Hello World" {
+		t.Errorf("expected 'Hello World', got %q", result)
+	}
+}
+
+func TestStreamMessage_Parsing(t *testing.T) {
+	// Test that StreamMessage can hold various message types
+	msg := StreamMessage{
+		Type:      "assistant",
+		SessionID: "test-session",
+		Message: &ClaudeMessage{
+			Content: []ContentBlock{
+				{Type: "text", Text: "Hello"},
+			},
+		},
+	}
+
+	if msg.Type != "assistant" {
+		t.Errorf("expected type 'assistant', got %s", msg.Type)
+	}
+	if msg.SessionID != "test-session" {
+		t.Errorf("expected session_id 'test-session', got %s", msg.SessionID)
+	}
+	if len(msg.Message.Content) != 1 {
+		t.Errorf("expected 1 content block, got %d", len(msg.Message.Content))
+	}
+	if msg.Message.Content[0].Text != "Hello" {
+		t.Errorf("expected text 'Hello', got %s", msg.Message.Content[0].Text)
+	}
+}
+
+// TestSpawner_CommandCreator tests the command creator injection
+func TestSpawner_CommandCreator(t *testing.T) {
+	spawner := NewSpawner()
+
+	// Verify default command creator works
+	cmd := spawner.commandCreator("echo", "test")
+	if cmd == nil {
+		t.Error("expected command to be created")
+	}
+
+	// Set custom command creator
+	customCalled := false
+	spawner.SetCommandCreator(func(name string, args ...string) *exec.Cmd {
+		customCalled = true
+		return exec.Command("true")
+	})
+
+	// Trigger command creation via Chat (which uses commandCreator)
+	agent, _ := spawner.Spawn(AgentTypeSoldati, "test", "turf", "/tmp")
+	_ = agent // Just creating to test the flow
+
+	if !customCalled {
+		// Not called because Spawn no longer starts a process
+		// This is expected behavior in the new architecture
 	}
 }

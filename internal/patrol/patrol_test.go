@@ -292,13 +292,13 @@ func TestPatrol_DetectsStuck(t *testing.T) {
 func TestPatrol_DetectsDead(t *testing.T) {
 	spawner := newMockSpawner()
 
-	// Add an agent without a process (dead)
+	// Add an agent without a spawner (dead)
 	testAgent := &agent.Agent{
 		ID:        "dead-agent",
 		Type:      agent.AgentTypeSoldati,
 		Name:      "dead",
 		StartedAt: time.Now().Add(-10 * time.Minute),
-		Cmd:       nil, // No process
+		// No spawner = dead in new architecture
 	}
 	spawner.addAgent(testAgent)
 
