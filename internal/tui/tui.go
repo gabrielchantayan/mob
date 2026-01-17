@@ -9,8 +9,9 @@ const (
 
 type Model struct {
 	ActiveTab int
+	InputRows int
 }
 
 func NewModel() Model {
-	return Model{ActiveTab: TabChat}
+	return Model{ActiveTab: TabChat, InputRows: clampHeight(3)}
 }
