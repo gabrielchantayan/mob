@@ -30,6 +30,6 @@ func TestParseStreamBlocksDelta(t *testing.T) {
 		t.Fatalf("expected 1 block, got %d", len(blocks))
 	}
 	if blocks[0].Type != ContentTypeText || blocks[0].Text != "hello world" {
-		t.Fatalf("unexpected delta text (type=%s text=%q)", blocks[0].Type, blocks[0].Text)
+		t.Fatalf("expected type=%s text=%q, got type=%s text=%q", ContentTypeText, "hello world", blocks[0].Type, blocks[0].Text)
 	}
 }
