@@ -127,7 +127,8 @@ type ContentBlock struct {
 	Input     map[string]interface{} `json:"input,omitempty"`
 	Summary   string                 `json:"summary,omitempty"`
 	ToolUseID string                 `json:"tool_use_id,omitempty"`
-	Content   string                 `json:"content,omitempty"`
+	Content   json.RawMessage        `json:"content,omitempty"`
+	Error     string                 `json:"error,omitempty"`
 }
 
 // UsageInfo represents token usage
@@ -331,11 +332,61 @@ func blocksFromAssistantMessage(message ClaudeMessage) []ChatContentBlock {
 		case "tool_result":
 			block.Type = ContentTypeToolResult
 			block.ID = cb.ToolUseID
-			block.Text = cb.Content
+			block.Text = extractToolResultText(cb.Content, cb.Text)
+			if block.Text == "" && cb.Error != "" {
+				block.Text = cb.Error
+			}
 		}
 		blocks = append(blocks, block)
 	}
 	return blocks
+}
+
+func extractToolResultText(raw json.RawMessage, fallback string) string {
+	if fallback != "" {
+		return fallback
+	}
+	if len(raw) == 0 {
+		return ""
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+
+	var payload struct {
+		Content string `json:"content"`
+		Error   string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &payload); err == nil {
+		if payload.Content != "" {
+			return payload.Content
+		}
+		if payload.Error != "" {
+			return payload.Error
+		}
+	}
+
+	var content struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &content); err == nil {
+		var b strings.Builder
+		for _, block := range content.Content {
+			if block.Type == "text" {
+				b.WriteString(block.Text)
+			}
+		}
+		if b.Len() > 0 {
+			return b.String()
+		}
+	}
+
+	return strings.TrimSpace(string(raw))
 }
 
 // Send sends a message (alias for Chat, for compatibility)

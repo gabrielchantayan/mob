@@ -17,7 +17,10 @@ func updateStreamBlocksFromMessage(msg StreamMessage, current map[int]*ChatConte
 		case "tool_result":
 			block.Type = ContentTypeToolResult
 			block.ID = msg.Event.ContentBlock.ToolUseID
-			block.Text = msg.Event.ContentBlock.Content
+			block.Text = extractToolResultText(msg.Event.ContentBlock.Content, msg.Event.ContentBlock.Text)
+			if block.Text == "" && msg.Event.ContentBlock.Error != "" {
+				block.Text = msg.Event.ContentBlock.Error
+			}
 		case "tool_use":
 			block.Type = ContentTypeToolUse
 			block.Name = msg.Event.ContentBlock.Name
