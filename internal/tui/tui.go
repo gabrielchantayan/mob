@@ -28,3 +28,7 @@ func NewModel() Model {
 		AgentsTab:      NewAgentsTab(),
 	}
 }
+
+func Run() error {
+	return nil
+}
