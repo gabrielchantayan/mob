@@ -58,6 +58,20 @@ func TestRenderAssistantToolOutput(t *testing.T) {
 	}
 }
 
+func TestRenderToolOutputPreservesWhitespace(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.Ascii)
+	m := Model{}
+	msg := ChatMessage{Blocks: []agent.ChatContentBlock{
+		{Type: agent.ContentTypeToolUse, Name: "bash", Input: `{"command":"ls"}`, ID: "call-1"},
+		{Type: agent.ContentTypeToolResult, ID: "call-1", Text: "col1  col2"},
+	}}
+
+	out := m.renderAssistantMessage(msg, 60)
+	if !strings.Contains(out, "col1  col2") {
+		t.Fatalf("expected whitespace preserved, got: %s", out)
+	}
+}
+
 func TestRenderContentBlockUsesParts(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.Ascii)
 	m := Model{}

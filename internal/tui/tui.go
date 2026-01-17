@@ -1647,7 +1647,7 @@ func (m Model) renderAssistantTool(part chatPart, width int) string {
 	}
 
 	// Block tool output for completed tool
-	title := fmt.Sprintf("# %s", strings.Title(part.ToolName))
+	title := fmt.Sprintf("# %s", titlecaseLabel(part.ToolName))
 	titleLine := lipgloss.NewStyle().
 		Foreground(textColor).
 		Background(bgElementColor).
@@ -1664,7 +1664,7 @@ func (m Model) renderAssistantTool(part chatPart, width int) string {
 		PaddingRight(1).
 		Width(width)
 
-	lines := strings.Split(wrapText(part.ToolOutput, width-6), "\n")
+	lines := wrapPreserveWhitespace(part.ToolOutput, width-6)
 	var body strings.Builder
 	for _, line := range lines {
 		body.WriteString(bodyStyle.Render(line))
@@ -1672,6 +1672,36 @@ func (m Model) renderAssistantTool(part chatPart, width int) string {
 	}
 
 	return titleLine + "\n" + strings.TrimRight(body.String(), "\n") + "\n"
+}
+
+func titlecaseLabel(input string) string {
+	if input == "" {
+		return input
+	}
+	runes := []rune(input)
+	runes[0] = []rune(strings.ToUpper(string(runes[0])))[0]
+	return string(runes)
+}
+
+func wrapPreserveWhitespace(text string, width int) []string {
+	if width <= 0 {
+		return strings.Split(text, "\n")
+	}
+
+	var wrapped []string
+	for _, line := range strings.Split(text, "\n") {
+		if line == "" {
+			wrapped = append(wrapped, "")
+			continue
+		}
+		for len(line) > width {
+			wrapped = append(wrapped, line[:width])
+			line = line[width:]
+		}
+		wrapped = append(wrapped, line)
+	}
+
+	return wrapped
 }
 
 func extractToolDescription(input string) string {
