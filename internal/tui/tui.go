@@ -22,6 +22,7 @@ import (
 	"github.com/gabe/mob/internal/soldati"
 	"github.com/gabe/mob/internal/storage"
 	"github.com/gabe/mob/internal/underboss"
+	"github.com/mattn/go-runewidth"
 )
 
 // tab represents the active tab in the TUI
@@ -148,6 +149,10 @@ type Model struct {
 	underboss     *underboss.Underboss
 	mobDir        string
 
+	slashCommands []SlashCommand
+	slashIndex    int
+	slashVisible  bool
+
 	// Agent records from registry
 	agentRecords []*registry.AgentRecord
 
@@ -215,17 +220,23 @@ func New() Model {
 	ti.Focus()
 
 	m := Model{
-		activeTab:           tabChat, // Chat-first
-		sidebarVisible:      true,
-		sidebarWidth:        sidebarWidthConst,
-		sessionStartTime:    time.Now(),
-		daemonStatus:        "unknown",
-		chatInput:           ti,
-		chatViewport:        vp,
-		chatMessages:        []ChatMessage{},
-		currentBlocks:       []agent.ChatContentBlock{},
-		underboss:           ub,
-		mobDir:              mobDir,
+		activeTab:        tabChat, // Chat-first
+		sidebarVisible:   true,
+		sidebarWidth:     sidebarWidthConst,
+		sessionStartTime: time.Now(),
+		daemonStatus:     "unknown",
+		chatInput:        ti,
+		chatViewport:     vp,
+		chatMessages:     []ChatMessage{},
+		currentBlocks:    []agent.ChatContentBlock{},
+		underboss:        ub,
+		mobDir:           mobDir,
+		slashCommands: []SlashCommand{
+			{Name: "new", Description: "New chat", Shortcut: "Ctrl+N"},
+			{Name: "status", Description: "Status"},
+		},
+		slashIndex:          0,
+		slashVisible:        false,
 		daemonLogViewport:   daemonVp,
 		daemonLogLines:      []string{},
 		daemonLogFile:       filepath.Join(mobDir, ".mob", "daemon.log"),
@@ -464,6 +475,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		// Handle chat input when on chat tab
 		if m.activeTab == tabChat && m.chatInput.Focused() {
+			m.updateSlashVisibility()
+
 			// Handle paste events with CRLF normalization
 			if msg.Paste {
 				normalized := strings.ReplaceAll(string(msg.Runes), "\r\n", "\n")
@@ -487,6 +500,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.sendMessage()
 				}
 				return m, nil
+			case "up":
+				if m.slashVisible {
+					m.slashIndex = NextSlashIndex(m.slashIndex, len(m.filteredSlashCommands()), -1)
+					return m, nil
+				}
+			case "down":
+				if m.slashVisible {
+					m.slashIndex = NextSlashIndex(m.slashIndex, len(m.filteredSlashCommands()), 1)
+					return m, nil
+				}
+			case "enter":
+				if m.slashVisible {
+					m.applySlashSelection()
+					return m, nil
+				}
 			// Scroll keybindings while input is focused
 			// Note: ctrl+j is used for newline in textarea, use ctrl+n/ctrl+p for line scroll
 			case "ctrl+n":
@@ -511,9 +539,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Update text input
 			var cmd tea.Cmd
 			m.chatInput, cmd = m.chatInput.Update(msg)
+			m.updateSlashVisibility()
 			// Dynamically adjust height based on content
 			m.updateInputHeight()
 			return m, cmd
+
 		}
 
 		// Normal navigation when not typing
@@ -524,21 +554,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tab", "right", "l":
 			m.activeTab = (m.activeTab + 1) % tab(len(tabNames))
 			m.updateFocus()
+			m.slashVisible = false
 		case "shift+tab", "left", "h":
 			m.activeTab = (m.activeTab - 1 + tab(len(tabNames))) % tab(len(tabNames))
 			m.updateFocus()
+			m.slashVisible = false
 		case "1":
 			m.activeTab = tabChat
 			m.updateFocus()
+			m.slashVisible = false
 		case "2":
 			m.activeTab = tabDaemon
 			m.updateFocus()
+			m.slashVisible = false
 		case "3":
 			m.activeTab = tabAgentOutput
 			m.updateFocus()
+			m.slashVisible = false
 		case "4":
 			m.activeTab = tabAgents
 			m.updateFocus()
+			m.slashVisible = false
 		case "s":
 			// Toggle sidebar (only if terminal is wide enough)
 			if m.width >= minWidthForSidebar {
@@ -772,6 +808,7 @@ func (m *Model) sendMessage() tea.Cmd {
 func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 	m.chatInput.Reset()
 	m.updateInputHeight()
+	m.slashVisible = false
 
 	// Parse the command (remove leading slash, get first word)
 	parts := strings.Fields(strings.TrimPrefix(cmd, "/"))
@@ -788,11 +825,90 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 		m.underboss.ClearSession()
 		m.updateChatViewport()
 		return nil
+	case "status":
+		m.chatError = fmt.Sprintf("Status: %s", m.daemonStatus)
+		return nil
 	default:
 		// Unknown command - show error briefly
 		m.chatError = fmt.Sprintf("Unknown command: /%s", parts[0])
 		return nil
 	}
+}
+
+func (m *Model) updateSlashVisibility() {
+	if m.activeTab != tabChat || !m.chatInput.Focused() {
+		m.slashVisible = false
+		return
+	}
+
+	input := m.chatInput.Value()
+	trimmed := strings.TrimSpace(input)
+	if strings.HasPrefix(trimmed, "/") {
+		matches := FilterSlashCommands(m.slashCommands, trimmed)
+		m.slashVisible = len(matches) > 0
+		if m.slashIndex >= len(matches) {
+			m.slashIndex = 0
+		}
+		return
+	}
+
+	m.slashVisible = false
+}
+
+func (m *Model) filteredSlashCommands() []SlashCommand {
+	return FilterSlashCommands(m.slashCommands, strings.TrimSpace(m.chatInput.Value()))
+}
+
+func (m *Model) applySlashSelection() {
+	matches := m.filteredSlashCommands()
+	if len(matches) == 0 {
+		m.slashVisible = false
+		return
+	}
+	if m.slashIndex >= len(matches) {
+		m.slashIndex = 0
+	}
+
+	selected := matches[m.slashIndex]
+	m.chatInput.SetValue("/" + selected.Name + " ")
+	m.slashVisible = false
+	m.updateInputHeight()
+}
+
+func (m Model) renderSlashPopover(width int) string {
+	matches := m.filteredSlashCommands()
+	if len(matches) == 0 {
+		return ""
+	}
+
+	popoverStyle := lipgloss.NewStyle().
+		Background(bgPanelColor).
+		Padding(1, 2).
+		Width(width)
+	muted := popoverStyle.Foreground(textMutedColor)
+	selectedStyle := popoverStyle.Foreground(textColor).Background(bgElementColor)
+
+	var b strings.Builder
+	for i, cmd := range matches {
+		label := "/" + cmd.Name
+		if cmd.Shortcut != "" {
+			label += " · " + cmd.Shortcut
+		}
+		row := label
+		if cmd.Description != "" {
+			row += " — " + cmd.Description
+		}
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		if i == m.slashIndex {
+			b.WriteString(selectedStyle.Render(row))
+		} else {
+			b.WriteString(muted.Render(row))
+		}
+	}
+
+	return b.String()
 }
 
 // listenForStreamUpdates returns a command that waits for the next stream update
@@ -1412,6 +1528,11 @@ func (m Model) renderChat() string {
 		footerBuilder.WriteString(footerStyle.Render(line))
 	}
 
+	if m.slashVisible {
+		footerBuilder.WriteString("\n")
+		footerBuilder.WriteString(m.renderSlashPopover(inputWidth))
+	}
+
 	// Add accent bar to the whole footer
 	footerContent := footerBuilder.String()
 	footerHeight := lipgloss.Height(footerContent)
@@ -1444,8 +1565,8 @@ func (m Model) renderChatHistory() string {
 
 	// Show current streaming blocks if waiting
 	if m.chatWaiting && len(m.currentBlocks) > 0 {
-		for _, block := range m.currentBlocks {
-			b.WriteString(m.renderContentBlock(block, width))
+		for _, part := range buildAssistantParts(m.currentBlocks) {
+			b.WriteString(m.renderAssistantPart(part, width))
 		}
 	}
 
@@ -1505,39 +1626,53 @@ func (m Model) renderUserMessage(content string, width int, isFirst bool) string
 	return b.String()
 }
 
+func (m Model) renderAssistantFooter(msg ChatMessage, width int) string {
+	if msg.Model == "" && msg.DurationMs == 0 {
+		return ""
+	}
+
+	footer := "▣ Build"
+	if msg.Model != "" {
+		footer += " · " + formatModelName(msg.Model)
+	}
+	if msg.DurationMs > 0 {
+		footer += fmt.Sprintf(" · %.1fs", float64(msg.DurationMs)/1000.0)
+	}
+
+	return lipgloss.NewStyle().
+		Foreground(textMutedColor).
+		Background(bgColor).
+		PaddingLeft(3).
+		Width(width).
+		Render(footer)
+}
+
 func (m Model) renderAssistantMessage(msg ChatMessage, width int) string {
 	var b strings.Builder
 
-	for _, block := range msg.Blocks {
-		b.WriteString(m.renderContentBlock(block, width))
+	for _, part := range buildAssistantParts(msg.Blocks) {
+		b.WriteString(m.renderAssistantPart(part, width))
 	}
 
-	// Footer with model and timing - OpenCode style: "▣ Mode · model · duration"
-	// paddingLeft 3 to match text parts
-	if msg.Model != "" || msg.DurationMs > 0 {
-		// Build footer content
-		footerContent := "▣ Build"
-		if msg.Model != "" {
-			footerContent += " · " + formatModelName(msg.Model)
-		}
-		if msg.DurationMs > 0 {
-			footerContent += fmt.Sprintf(" · %.1fs", float64(msg.DurationMs)/1000.0)
-		}
-
-		// Style the entire footer line with background filling the width
-		footerStyle := lipgloss.NewStyle().
-			Foreground(textMutedColor).
-			Background(bgColor).
-			PaddingLeft(3).
-			Width(width)
-
-		b.WriteString("\n" + footerStyle.Render(footerContent) + "\n")
+	footer := m.renderAssistantFooter(msg, width)
+	if footer != "" {
+		b.WriteString("\n" + footer + "\n")
 	}
 
 	return b.String()
 }
 
 func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) string {
+	var b strings.Builder
+
+	for _, part := range buildAssistantParts([]agent.ChatContentBlock{block}) {
+		b.WriteString(m.renderAssistantPart(part, width))
+	}
+
+	return b.String()
+}
+
+func (m Model) renderAssistantPart(part chatPart, width int) string {
 	var b strings.Builder
 
 	// Box-drawing border character (OpenCode uses "┃")
@@ -1548,8 +1683,8 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 		Background(bgColor).
 		Width(width)
 
-	switch block.Type {
-	case agent.ContentTypeThinking:
+	switch part.Type {
+	case partReasoning:
 		// OpenCode: paddingLeft 2, marginTop 1, border left with backgroundElement color
 		border := lipgloss.NewStyle().
 			Foreground(bgElementColor). // Subtle border for thinking
@@ -1558,8 +1693,8 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 
 		// Header: "_Thinking:_" prefix like OpenCode
 		header := "_Thinking:_ "
-		if block.Summary != "" {
-			header += block.Summary
+		if part.Summary != "" {
+			header += part.Summary
 		}
 		headerStyled := lipgloss.NewStyle().
 			Foreground(textMutedColor).
@@ -1571,47 +1706,18 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 		b.WriteString(lineStyle.Render(border+"  "+headerStyled) + "\n")
 
 		// Thinking content (muted, wrapped) - paddingLeft 2 from border
-		if block.Text != "" {
-			lines := strings.Split(wrapText(block.Text, width-6), "\n")
+		if part.Text != "" {
+			lines := strings.Split(wrapText(part.Text, width-6), "\n")
 			for _, line := range lines {
-				styledLine := lipgloss.NewStyle().Foreground(textMutedColor).Render(line)
+				styledLine := lipgloss.NewStyle().Foreground(textMutedColor).Italic(true).Render(line)
 				b.WriteString(lineStyle.Render(border+"  "+styledLine) + "\n")
 			}
 		}
 
-	case agent.ContentTypeToolUse:
-		// OpenCode InlineTool: paddingLeft 3, then paddingLeft 3 for text = 6 total
-		// Get tool icon
-		icon := toolIcons[block.Name]
-		if icon == "" {
-			icon = "⊛" // Default tool icon
-		}
+	case partTool:
+		b.WriteString(m.renderAssistantTool(part, width))
 
-		// Tool header: icon + tool name
-		toolHeader := fmt.Sprintf("%s %s", icon, block.Name)
-		headerStyled := lipgloss.NewStyle().
-			Foreground(textMutedColor).
-			Render(toolHeader)
-
-		// Extract and display description from input
-		desc := extractToolDescription(block.Input)
-		descStyled := ""
-		if desc != "" {
-			// Truncate if too long
-			if len(desc) > width-12 {
-				desc = desc[:width-15] + "..."
-			}
-			descStyled = lipgloss.NewStyle().Foreground(textMutedColor).Render(" " + desc)
-		}
-
-		// Inline format like OpenCode: icon name description with full-width background
-		toolLineStyle := lipgloss.NewStyle().
-			Background(bgColor).
-			PaddingLeft(6).
-			Width(width)
-		b.WriteString(toolLineStyle.Render(headerStyled+descStyled) + "\n")
-
-	case agent.ContentTypeText:
+	case partText:
 		// OpenCode TextPart: paddingLeft 3, marginTop 1
 		// marginTop 1
 		b.WriteString(lineStyle.Render("") + "\n")
@@ -1622,13 +1728,113 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 			PaddingLeft(3).
 			Width(width)
 
-		lines := strings.Split(wrapText(block.Text, width-6), "\n")
+		lines := strings.Split(wrapText(part.Text, width-6), "\n")
 		for _, line := range lines {
 			b.WriteString(textLineStyle.Render(line) + "\n")
 		}
 	}
 
 	return b.String()
+}
+
+func (m Model) renderAssistantTool(part chatPart, width int) string {
+	// Inline tool row when output not yet available
+	if part.ToolOutput == "" {
+		icon := toolIcons[part.ToolName]
+		if icon == "" {
+			icon = "⊛"
+		}
+
+		toolHeader := fmt.Sprintf("%s %s", icon, part.ToolName)
+		headerStyled := lipgloss.NewStyle().
+			Foreground(textMutedColor).
+			Render(toolHeader)
+
+		desc := extractToolDescription(part.ToolInput)
+		descStyled := ""
+		if desc != "" {
+			if len(desc) > width-12 {
+				desc = desc[:width-15] + "..."
+			}
+			descStyled = lipgloss.NewStyle().Foreground(textMutedColor).Render(" " + desc)
+		}
+
+		toolLineStyle := lipgloss.NewStyle().
+			Background(bgColor).
+			PaddingLeft(6).
+			Width(width)
+
+		return toolLineStyle.Render(headerStyled+descStyled) + "\n"
+	}
+
+	// Block tool output for completed tool
+	title := fmt.Sprintf("# %s", titlecaseLabel(part.ToolName))
+	titleLine := lipgloss.NewStyle().
+		Foreground(textColor).
+		Background(bgElementColor).
+		PaddingLeft(3).
+		PaddingTop(1).
+		PaddingBottom(1).
+		Width(width).
+		Render(title)
+
+	bodyStyle := lipgloss.NewStyle().
+		Foreground(textColor).
+		Background(bgElementColor).
+		PaddingLeft(3).
+		PaddingRight(1).
+		Width(width)
+
+	lines := wrapPreserveWhitespace(part.ToolOutput, width-6)
+	var body strings.Builder
+	for _, line := range lines {
+		body.WriteString(bodyStyle.Render(line))
+		body.WriteString("\n")
+	}
+
+	return titleLine + "\n" + strings.TrimRight(body.String(), "\n") + "\n"
+}
+
+func titlecaseLabel(input string) string {
+	if input == "" {
+		return input
+	}
+	runes := []rune(input)
+	upper := []rune(strings.ToUpper(string(runes[0])))
+	return string(upper) + string(runes[1:])
+}
+
+func wrapPreserveWhitespace(text string, width int) []string {
+	if width <= 0 {
+		return strings.Split(text, "\n")
+	}
+
+	var wrapped []string
+	for _, line := range strings.Split(text, "\n") {
+		if line == "" {
+			wrapped = append(wrapped, "")
+			continue
+		}
+		runes := []rune(line)
+		for len(runes) > 0 {
+			segmentWidth := 0
+			cut := 0
+			for cut < len(runes) {
+				segmentWidth += runewidth.RuneWidth(runes[cut])
+				if segmentWidth > width {
+					break
+				}
+				cut++
+			}
+			if cut == 0 {
+				cut = 1
+			}
+			wrapped = append(wrapped, string(runes[:cut]))
+			runes = runes[cut:]
+		}
+	}
+
+	return wrapped
 }
 
 func extractToolDescription(input string) string {

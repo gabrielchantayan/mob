@@ -25,14 +25,14 @@ const (
 type Agent struct {
 	ID           string
 	Type         AgentType
-	Name         string    // e.g., "vinnie" for soldati
-	Turf         string    // project this agent works on
-	WorkDir      string    // working directory for Claude
+	Name         string // e.g., "vinnie" for soldati
+	Turf         string // project this agent works on
+	WorkDir      string // working directory for Claude
 	StartedAt    time.Time
-	SessionID    string    // Claude session ID for --resume
-	SystemPrompt string    // System prompt injected on first call
-	MCPConfig    string    // Path to MCP config JSON file
-	Model        string    // Model to use (e.g., "sonnet", "opus") - passed as --model flag
+	SessionID    string // Claude session ID for --resume
+	SystemPrompt string // System prompt injected on first call
+	MCPConfig    string // Path to MCP config JSON file
+	Model        string // Model to use (e.g., "sonnet", "opus") - passed as --model flag
 	spawner      *Spawner
 	mu           sync.Mutex
 }
@@ -41,9 +41,9 @@ type Agent struct {
 type ContentBlockType string
 
 const (
-	ContentTypeText     ContentBlockType = "text"
-	ContentTypeThinking ContentBlockType = "thinking"
-	ContentTypeToolUse  ContentBlockType = "tool_use"
+	ContentTypeText       ContentBlockType = "text"
+	ContentTypeThinking   ContentBlockType = "thinking"
+	ContentTypeToolUse    ContentBlockType = "tool_use"
 	ContentTypeToolResult ContentBlockType = "tool_result"
 )
 
@@ -60,12 +60,12 @@ type ChatContentBlock struct {
 
 // ChatResponse represents a complete response from Claude
 type ChatResponse struct {
-	Blocks      []ChatContentBlock
-	SessionID   string
-	Model       string
-	DurationMs  int64
-	TotalCost   float64
-	InputTokens int
+	Blocks       []ChatContentBlock
+	SessionID    string
+	Model        string
+	DurationMs   int64
+	TotalCost    float64
+	InputTokens  int
 	OutputTokens int
 }
 
@@ -85,22 +85,22 @@ type StreamCallback func(block ChatContentBlock)
 
 // StreamMessage represents a message in Claude's stream-json output
 type StreamMessage struct {
-	Type      string          `json:"type"`
-	Subtype   string          `json:"subtype,omitempty"`
-	SessionID string          `json:"session_id,omitempty"`
-	Message   *ClaudeMessage  `json:"message,omitempty"`
-	Event     *StreamEvent    `json:"event,omitempty"`
-	Result    string          `json:"result,omitempty"`
-	IsError   bool            `json:"is_error,omitempty"`
-	DurationMs int64          `json:"duration_ms,omitempty"`
-	TotalCostUSD float64      `json:"total_cost_usd,omitempty"`
-	Usage     *UsageInfo      `json:"usage,omitempty"`
+	Type         string         `json:"type"`
+	Subtype      string         `json:"subtype,omitempty"`
+	SessionID    string         `json:"session_id,omitempty"`
+	Message      *ClaudeMessage `json:"message,omitempty"`
+	Event        *StreamEvent   `json:"event,omitempty"`
+	Result       string         `json:"result,omitempty"`
+	IsError      bool           `json:"is_error,omitempty"`
+	DurationMs   int64          `json:"duration_ms,omitempty"`
+	TotalCostUSD float64        `json:"total_cost_usd,omitempty"`
+	Usage        *UsageInfo     `json:"usage,omitempty"`
 }
 
 // StreamEvent represents streaming events
 type StreamEvent struct {
-	Type         string       `json:"type"`
-	Index        int          `json:"index,omitempty"`
+	Type         string        `json:"type"`
+	Index        int           `json:"index,omitempty"`
 	ContentBlock *ContentBlock `json:"content_block,omitempty"`
 	Delta        *ContentDelta `json:"delta,omitempty"`
 }
@@ -120,12 +120,14 @@ type ClaudeMessage struct {
 
 // ContentBlock represents a content block in Claude's response
 type ContentBlock struct {
-	Type    string                 `json:"type"`
-	Text    string                 `json:"text,omitempty"`
-	Name    string                 `json:"name,omitempty"`
-	ID      string                 `json:"id,omitempty"`
-	Input   map[string]interface{} `json:"input,omitempty"`
-	Summary string                 `json:"summary,omitempty"`
+	Type      string                 `json:"type"`
+	Text      string                 `json:"text,omitempty"`
+	Name      string                 `json:"name,omitempty"`
+	ID        string                 `json:"id,omitempty"`
+	Input     map[string]interface{} `json:"input,omitempty"`
+	Summary   string                 `json:"summary,omitempty"`
+	ToolUseID string                 `json:"tool_use_id,omitempty"`
+	Content   string                 `json:"content,omitempty"`
 }
 
 // UsageInfo represents token usage
@@ -230,7 +232,8 @@ func (a *Agent) ChatStream(message string, callback StreamCallback) (*ChatRespon
 
 	// Parse streaming output
 	response := &ChatResponse{}
-	currentBlocks := make(map[int]*ChatContentBlock) // Track blocks by index
+	var streamLines []string
+	currentBlocks := map[int]*ChatContentBlock{}
 
 	scanner := bufio.NewScanner(stdout)
 	// Increase buffer size for large responses
@@ -246,9 +249,17 @@ func (a *Agent) ChatStream(message string, callback StreamCallback) (*ChatRespon
 			continue
 		}
 
+		streamLines = append(streamLines, line)
+
 		var msg StreamMessage
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
 			continue
+		}
+
+		if callback != nil {
+			if block := updateStreamBlocksFromMessage(msg, currentBlocks); block != nil {
+				callback(*block)
+			}
 		}
 
 		// Capture session ID
@@ -257,87 +268,14 @@ func (a *Agent) ChatStream(message string, callback StreamCallback) (*ChatRespon
 			response.SessionID = msg.SessionID
 		}
 
-		// Handle streaming events
-		if msg.Type == "stream_event" && msg.Event != nil {
-			switch msg.Event.Type {
-			case "content_block_start":
-				if msg.Event.ContentBlock != nil {
-					block := &ChatContentBlock{
-						Index: msg.Event.Index,
-					}
-					switch msg.Event.ContentBlock.Type {
-					case "text":
-						block.Type = ContentTypeText
-					case "thinking":
-						block.Type = ContentTypeThinking
-						block.Summary = msg.Event.ContentBlock.Summary
-					case "tool_use":
-						block.Type = ContentTypeToolUse
-						block.Name = msg.Event.ContentBlock.Name
-						block.ID = msg.Event.ContentBlock.ID
-					}
-					currentBlocks[msg.Event.Index] = block
-					if callback != nil {
-						callback(*block)
-					}
-				}
-
-			case "content_block_delta":
-				if msg.Event.Delta != nil && currentBlocks[msg.Event.Index] != nil {
-					block := currentBlocks[msg.Event.Index]
-					switch msg.Event.Delta.Type {
-					case "text_delta":
-						block.Text += msg.Event.Delta.Text
-					case "thinking_delta":
-						block.Text += msg.Event.Delta.Text
-					case "summary_delta":
-						block.Summary += msg.Event.Delta.Summary
-					case "input_json_delta":
-						block.Input += msg.Event.Delta.Text
-					}
-					if callback != nil {
-						callback(*block)
-					}
-				}
-
-			case "content_block_stop":
-				if block, ok := currentBlocks[msg.Event.Index]; ok {
-					response.Blocks = append(response.Blocks, *block)
-					delete(currentBlocks, msg.Event.Index)
-				}
-			}
-		}
-
 		// Handle final assistant message (non-streaming)
 		if msg.Type == "assistant" && msg.Message != nil {
 			response.Model = msg.Message.Model
 			// If no streaming blocks, extract from final message
 			if len(response.Blocks) == 0 {
-				for _, cb := range msg.Message.Content {
-					block := ChatContentBlock{}
-					switch cb.Type {
-					case "text":
-						block.Type = ContentTypeText
-						block.Text = cb.Text
-					case "thinking":
-						block.Type = ContentTypeThinking
-						block.Text = cb.Text
-						block.Summary = cb.Summary
-					case "tool_use":
-						block.Type = ContentTypeToolUse
-						block.Name = cb.Name
-						block.ID = cb.ID
-						if cb.Input != nil {
-							inputJSON, _ := json.Marshal(cb.Input)
-							block.Input = string(inputJSON)
-						}
-					}
-					response.Blocks = append(response.Blocks, block)
-					if callback != nil {
-						callback(block)
-					}
-				}
+				response.Blocks = append(response.Blocks, blocksFromAssistantMessage(*msg.Message)...)
 			}
+
 		}
 
 		// Handle result message
@@ -354,6 +292,10 @@ func (a *Agent) ChatStream(message string, callback StreamCallback) (*ChatRespon
 		}
 	}
 
+	for _, block := range parseStreamBlocks(streamLines) {
+		response.Blocks = append(response.Blocks, block)
+	}
+
 	// Wait for command to finish
 	if err := cmd.Wait(); err != nil {
 		return nil, fmt.Errorf("claude command failed: %w (stderr: %s)", err, stderrBuf.String())
@@ -364,6 +306,36 @@ func (a *Agent) ChatStream(message string, callback StreamCallback) (*ChatRespon
 	}
 
 	return response, nil
+}
+
+func blocksFromAssistantMessage(message ClaudeMessage) []ChatContentBlock {
+	blocks := make([]ChatContentBlock, 0, len(message.Content))
+	for _, cb := range message.Content {
+		block := ChatContentBlock{}
+		switch cb.Type {
+		case "text":
+			block.Type = ContentTypeText
+			block.Text = cb.Text
+		case "thinking":
+			block.Type = ContentTypeThinking
+			block.Text = cb.Text
+			block.Summary = cb.Summary
+		case "tool_use":
+			block.Type = ContentTypeToolUse
+			block.Name = cb.Name
+			block.ID = cb.ID
+			if cb.Input != nil {
+				inputJSON, _ := json.Marshal(cb.Input)
+				block.Input = string(inputJSON)
+			}
+		case "tool_result":
+			block.Type = ContentTypeToolResult
+			block.ID = cb.ToolUseID
+			block.Text = cb.Content
+		}
+		blocks = append(blocks, block)
+	}
+	return blocks
 }
 
 // Send sends a message (alias for Chat, for compatibility)

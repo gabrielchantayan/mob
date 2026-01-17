@@ -257,7 +257,7 @@ Note: The soldati must be actively running for attachment to work.`,
 			os.Exit(1)
 		}
 
-		fmt.Printf("Attaching to soldati '%s' (PID: %d)...\n", name, agent.PID)
+		fmt.Printf("Attaching to soldati '%s'...\n", name)
 		fmt.Println()
 		fmt.Println("Note: Session attachment is not yet fully implemented.")
 		fmt.Println("This feature requires deeper integration with Claude Code's stdio streams.")
