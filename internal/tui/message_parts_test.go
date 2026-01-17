@@ -42,3 +42,18 @@ func TestRenderAssistantFooter(t *testing.T) {
 		t.Fatalf("footer missing expected tokens: %s", out)
 	}
 }
+
+func TestRenderAssistantToolOutput(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.Ascii)
+	m := Model{}
+	msg := ChatMessage{Blocks: []agent.ChatContentBlock{
+		{Type: agent.ContentTypeToolUse, Name: "bash", Input: `{"command":"ls"}`, ID: "call-1"},
+		{Type: agent.ContentTypeToolResult, ID: "call-1", Text: "file.txt"},
+		{Type: agent.ContentTypeText, Text: "done"},
+	}}
+
+	out := m.renderAssistantMessage(msg, 60)
+	if !strings.Contains(out, "file.txt") {
+		t.Fatalf("expected tool output to render, got: %s", out)
+	}
+}

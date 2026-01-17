@@ -1444,8 +1444,8 @@ func (m Model) renderChatHistory() string {
 
 	// Show current streaming blocks if waiting
 	if m.chatWaiting && len(m.currentBlocks) > 0 {
-		for _, block := range m.currentBlocks {
-			b.WriteString(m.renderContentBlock(block, width))
+		for _, part := range buildAssistantParts(m.currentBlocks) {
+			b.WriteString(m.renderAssistantPart(part, width))
 		}
 	}
 
@@ -1529,8 +1529,8 @@ func (m Model) renderAssistantFooter(msg ChatMessage, width int) string {
 func (m Model) renderAssistantMessage(msg ChatMessage, width int) string {
 	var b strings.Builder
 
-	for _, block := range msg.Blocks {
-		b.WriteString(m.renderContentBlock(block, width))
+	for _, part := range buildAssistantParts(msg.Blocks) {
+		b.WriteString(m.renderAssistantPart(part, width))
 	}
 
 	footer := m.renderAssistantFooter(msg, width)
@@ -1541,7 +1541,7 @@ func (m Model) renderAssistantMessage(msg ChatMessage, width int) string {
 	return b.String()
 }
 
-func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) string {
+func (m Model) renderAssistantPart(part chatPart, width int) string {
 	var b strings.Builder
 
 	// Box-drawing border character (OpenCode uses "┃")
@@ -1552,8 +1552,8 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 		Background(bgColor).
 		Width(width)
 
-	switch block.Type {
-	case agent.ContentTypeThinking:
+	switch part.Type {
+	case partReasoning:
 		// OpenCode: paddingLeft 2, marginTop 1, border left with backgroundElement color
 		border := lipgloss.NewStyle().
 			Foreground(bgElementColor). // Subtle border for thinking
@@ -1562,8 +1562,8 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 
 		// Header: "_Thinking:_" prefix like OpenCode
 		header := "_Thinking:_ "
-		if block.Summary != "" {
-			header += block.Summary
+		if part.Summary != "" {
+			header += part.Summary
 		}
 		headerStyled := lipgloss.NewStyle().
 			Foreground(textMutedColor).
@@ -1575,47 +1575,18 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 		b.WriteString(lineStyle.Render(border+"  "+headerStyled) + "\n")
 
 		// Thinking content (muted, wrapped) - paddingLeft 2 from border
-		if block.Text != "" {
-			lines := strings.Split(wrapText(block.Text, width-6), "\n")
+		if part.Text != "" {
+			lines := strings.Split(wrapText(part.Text, width-6), "\n")
 			for _, line := range lines {
 				styledLine := lipgloss.NewStyle().Foreground(textMutedColor).Render(line)
 				b.WriteString(lineStyle.Render(border+"  "+styledLine) + "\n")
 			}
 		}
 
-	case agent.ContentTypeToolUse:
-		// OpenCode InlineTool: paddingLeft 3, then paddingLeft 3 for text = 6 total
-		// Get tool icon
-		icon := toolIcons[block.Name]
-		if icon == "" {
-			icon = "⊛" // Default tool icon
-		}
+	case partTool:
+		b.WriteString(m.renderAssistantTool(part, width))
 
-		// Tool header: icon + tool name
-		toolHeader := fmt.Sprintf("%s %s", icon, block.Name)
-		headerStyled := lipgloss.NewStyle().
-			Foreground(textMutedColor).
-			Render(toolHeader)
-
-		// Extract and display description from input
-		desc := extractToolDescription(block.Input)
-		descStyled := ""
-		if desc != "" {
-			// Truncate if too long
-			if len(desc) > width-12 {
-				desc = desc[:width-15] + "..."
-			}
-			descStyled = lipgloss.NewStyle().Foreground(textMutedColor).Render(" " + desc)
-		}
-
-		// Inline format like OpenCode: icon name description with full-width background
-		toolLineStyle := lipgloss.NewStyle().
-			Background(bgColor).
-			PaddingLeft(6).
-			Width(width)
-		b.WriteString(toolLineStyle.Render(headerStyled+descStyled) + "\n")
-
-	case agent.ContentTypeText:
+	case partText:
 		// OpenCode TextPart: paddingLeft 3, marginTop 1
 		// marginTop 1
 		b.WriteString(lineStyle.Render("") + "\n")
@@ -1626,13 +1597,71 @@ func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) strin
 			PaddingLeft(3).
 			Width(width)
 
-		lines := strings.Split(wrapText(block.Text, width-6), "\n")
+		lines := strings.Split(wrapText(part.Text, width-6), "\n")
 		for _, line := range lines {
 			b.WriteString(textLineStyle.Render(line) + "\n")
 		}
 	}
 
 	return b.String()
+}
+
+func (m Model) renderAssistantTool(part chatPart, width int) string {
+	// Inline tool row when output not yet available
+	if part.ToolOutput == "" {
+		icon := toolIcons[part.ToolName]
+		if icon == "" {
+			icon = "⊛"
+		}
+
+		toolHeader := fmt.Sprintf("%s %s", icon, part.ToolName)
+		headerStyled := lipgloss.NewStyle().
+			Foreground(textMutedColor).
+			Render(toolHeader)
+
+		desc := extractToolDescription(part.ToolInput)
+		descStyled := ""
+		if desc != "" {
+			if len(desc) > width-12 {
+				desc = desc[:width-15] + "..."
+			}
+			descStyled = lipgloss.NewStyle().Foreground(textMutedColor).Render(" " + desc)
+		}
+
+		toolLineStyle := lipgloss.NewStyle().
+			Background(bgColor).
+			PaddingLeft(6).
+			Width(width)
+
+		return toolLineStyle.Render(headerStyled+descStyled) + "\n"
+	}
+
+	// Block tool output for completed tool
+	title := fmt.Sprintf("# %s", strings.Title(part.ToolName))
+	titleLine := lipgloss.NewStyle().
+		Foreground(textColor).
+		Background(bgElementColor).
+		PaddingLeft(3).
+		PaddingTop(1).
+		PaddingBottom(1).
+		Width(width).
+		Render(title)
+
+	bodyStyle := lipgloss.NewStyle().
+		Foreground(textColor).
+		Background(bgElementColor).
+		PaddingLeft(3).
+		PaddingRight(1).
+		Width(width)
+
+	lines := strings.Split(wrapText(part.ToolOutput, width-6), "\n")
+	var body strings.Builder
+	for _, line := range lines {
+		body.WriteString(bodyStyle.Render(line))
+		body.WriteString("\n")
+	}
+
+	return titleLine + "\n" + strings.TrimRight(body.String(), "\n") + "\n"
 }
 
 func extractToolDescription(input string) string {
