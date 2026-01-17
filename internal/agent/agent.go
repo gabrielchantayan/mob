@@ -273,27 +273,7 @@ func (a *Agent) ChatStream(message string, callback StreamCallback) (*ChatRespon
 			response.Model = msg.Message.Model
 			// If no streaming blocks, extract from final message
 			if len(response.Blocks) == 0 {
-				for _, cb := range msg.Message.Content {
-					block := ChatContentBlock{}
-					switch cb.Type {
-					case "text":
-						block.Type = ContentTypeText
-						block.Text = cb.Text
-					case "thinking":
-						block.Type = ContentTypeThinking
-						block.Text = cb.Text
-						block.Summary = cb.Summary
-					case "tool_use":
-						block.Type = ContentTypeToolUse
-						block.Name = cb.Name
-						block.ID = cb.ID
-						if cb.Input != nil {
-							inputJSON, _ := json.Marshal(cb.Input)
-							block.Input = string(inputJSON)
-						}
-					}
-					response.Blocks = append(response.Blocks, block)
-				}
+				response.Blocks = append(response.Blocks, blocksFromAssistantMessage(*msg.Message)...)
 			}
 
 		}
@@ -326,6 +306,36 @@ func (a *Agent) ChatStream(message string, callback StreamCallback) (*ChatRespon
 	}
 
 	return response, nil
+}
+
+func blocksFromAssistantMessage(message ClaudeMessage) []ChatContentBlock {
+	blocks := make([]ChatContentBlock, 0, len(message.Content))
+	for _, cb := range message.Content {
+		block := ChatContentBlock{}
+		switch cb.Type {
+		case "text":
+			block.Type = ContentTypeText
+			block.Text = cb.Text
+		case "thinking":
+			block.Type = ContentTypeThinking
+			block.Text = cb.Text
+			block.Summary = cb.Summary
+		case "tool_use":
+			block.Type = ContentTypeToolUse
+			block.Name = cb.Name
+			block.ID = cb.ID
+			if cb.Input != nil {
+				inputJSON, _ := json.Marshal(cb.Input)
+				block.Input = string(inputJSON)
+			}
+		case "tool_result":
+			block.Type = ContentTypeToolResult
+			block.ID = cb.ToolUseID
+			block.Text = cb.Content
+		}
+		blocks = append(blocks, block)
+	}
+	return blocks
 }
 
 // Send sends a message (alias for Chat, for compatibility)

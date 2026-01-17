@@ -120,6 +120,21 @@ func runChatStreamLines(lines []string) ([]ChatContentBlock, []ChatContentBlock)
 	return callbacks, response.Blocks
 }
 
+func TestAssistantMessageToolResult(t *testing.T) {
+	blocks := blocksFromAssistantMessage(ClaudeMessage{Content: []ContentBlock{{
+		Type:      "tool_result",
+		ToolUseID: "call-1",
+		Content:   "ok",
+	}}})
+
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(blocks))
+	}
+	if blocks[0].Type != ContentTypeToolResult || blocks[0].ID != "call-1" || blocks[0].Text != "ok" {
+		t.Fatalf("unexpected tool_result mapping: %+v", blocks[0])
+	}
+}
+
 func newTempDir() string {
 	dir, _ := os.MkdirTemp("", "mob-agent-test")
 	return dir
