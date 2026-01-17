@@ -233,6 +233,7 @@ func (a *Agent) ChatStream(message string, callback StreamCallback) (*ChatRespon
 	// Parse streaming output
 	response := &ChatResponse{}
 	var streamLines []string
+	currentBlocks := map[int]*ChatContentBlock{}
 
 	scanner := bufio.NewScanner(stdout)
 	// Increase buffer size for large responses
@@ -253,6 +254,12 @@ func (a *Agent) ChatStream(message string, callback StreamCallback) (*ChatRespon
 		var msg StreamMessage
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
 			continue
+		}
+
+		if callback != nil {
+			if block := updateStreamBlocksFromMessage(msg, currentBlocks); block != nil {
+				callback(*block)
+			}
 		}
 
 		// Capture session ID
@@ -286,11 +293,9 @@ func (a *Agent) ChatStream(message string, callback StreamCallback) (*ChatRespon
 						}
 					}
 					response.Blocks = append(response.Blocks, block)
-					if callback != nil {
-						callback(block)
-					}
 				}
 			}
+
 		}
 
 		// Handle result message
@@ -309,9 +314,6 @@ func (a *Agent) ChatStream(message string, callback StreamCallback) (*ChatRespon
 
 	for _, block := range parseStreamBlocks(streamLines) {
 		response.Blocks = append(response.Blocks, block)
-		if callback != nil {
-			callback(block)
-		}
 	}
 
 	// Wait for command to finish
