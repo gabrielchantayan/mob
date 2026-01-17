@@ -30,20 +30,20 @@ Features specified in SPEC.md that are not yet implemented.
 - [ ] Exclude from git tracking
 
 ### Associates
-- [ ] Spawning mechanism from Soldati/Underboss
+- [x] Spawning mechanism from Soldati/Underboss (via spawn_associate MCP tool)
 - [ ] `max_per_soldati` config limit enforcement
-- [ ] Shorter timeouts than Soldati
-- [ ] No hook file - inline work assignment
-- [ ] Limited git access (branches only, no merge)
+- [x] Shorter timeouts than Soldati (auto-cleanup on task completion)
+- [x] No hook file - inline work assignment (task assigned at spawn)
+- [x] Auto-complete/block linked beads based on success/failure
 
 ### Notifications
-- [ ] Terminal notifications via osascript (macOS)
-- [ ] Summary reports (periodic digest)
-- [ ] Notification triggers:
-  - [ ] Task completion
-  - [ ] Approval requests
-  - [ ] Errors/stuck agents
-  - [ ] Rate limit warnings
+- [x] Terminal notifications via osascript (macOS)
+- [x] Summary reports (periodic digest)
+- [x] Notification triggers:
+  - [x] Task completion
+  - [x] Approval requests
+  - [x] Errors/stuck agents
+  - [x] Rate limit warnings
 
 ### Seance (Session Resume)
 - [ ] Query previous sessions via `/resume`
