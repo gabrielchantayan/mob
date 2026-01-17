@@ -30,7 +30,7 @@ The TUI is a terminal dashboard built using **Bubble Tea** (charmbracelet/bubble
 ## Main Tabs
 
 ### Tab 1: Chat
-- Interactive chat interface with Claude AI
+- Interactive chat interface with the Underboss 
 - Streaming response support with real-time thinking and tool use display
 - Multiline input with dynamic height expansion (3-24 lines)
 - Slash command support with autocomplete
@@ -86,12 +86,11 @@ Visible when terminal width >= 120 characters. Contains:
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `Right` / `l` | Next tab |
-| `Shift+Tab` / `Left` / `h` | Previous tab |
+| `Tab` / `Right` / `]` | Next tab |
+| `Shift+Tab` / `Left` / `[` | Previous tab |
 | `1`, `2`, `3`, `4` | Jump to specific tab |
-| `s` | Toggle sidebar |
 | `Ctrl+C` | Quit |
-| `:q`, `:qa`, `:wq` | Vim-style quit |
+| `:q`, `:qa`, `:qa!` | Vim-style quit |
 
 ### Chat Tab (Input Focused)
 
