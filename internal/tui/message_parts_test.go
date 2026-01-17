@@ -77,7 +77,7 @@ func TestRenderToolOutputPreservesUnicode(t *testing.T) {
 	m := Model{}
 	msg := ChatMessage{Blocks: []agent.ChatContentBlock{
 		{Type: agent.ContentTypeToolUse, Name: "bash", Input: `{"command":"ls"}`, ID: "call-1"},
-		{Type: agent.ContentTypeToolResult, ID: "call-1", Text: "éééé"},
+		{Type: agent.ContentTypeToolResult, ID: "call-1", Text: "🙂🙂"},
 	}}
 
 	out := m.renderAssistantMessage(msg, 9)
@@ -87,7 +87,7 @@ func TestRenderToolOutputPreservesUnicode(t *testing.T) {
 		}
 		return r
 	}, out)
-	if !strings.Contains(compact, "éééé") {
+	if !strings.Contains(compact, "🙂🙂") {
 		t.Fatalf("expected unicode preserved, got: %s", out)
 	}
 }

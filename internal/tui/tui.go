@@ -22,6 +22,7 @@ import (
 	"github.com/gabe/mob/internal/soldati"
 	"github.com/gabe/mob/internal/storage"
 	"github.com/gabe/mob/internal/underboss"
+	"github.com/mattn/go-runewidth"
 )
 
 // tab represents the active tab in the TUI
@@ -1694,12 +1695,23 @@ func wrapPreserveWhitespace(text string, width int) []string {
 			wrapped = append(wrapped, "")
 			continue
 		}
-		for len([]rune(line)) > width {
-			runes := []rune(line)
-			wrapped = append(wrapped, string(runes[:width]))
-			line = string(runes[width:])
+		runes := []rune(line)
+		for len(runes) > 0 {
+			segmentWidth := 0
+			cut := 0
+			for cut < len(runes) {
+				segmentWidth += runewidth.RuneWidth(runes[cut])
+				if segmentWidth > width {
+					break
+				}
+				cut++
+			}
+			if cut == 0 {
+				cut = 1
+			}
+			wrapped = append(wrapped, string(runes[:cut]))
+			runes = runes[cut:]
 		}
-		wrapped = append(wrapped, line)
 	}
 
 	return wrapped
