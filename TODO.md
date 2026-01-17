@@ -5,23 +5,23 @@ Features specified in SPEC.md that are not yet implemented.
 ## Major Missing Features
 
 ### Approval Flow
-- [ ] `mob approve <bead-id>` command
-- [ ] `mob reject <bead-id>` command
-- [ ] `pending_approval` status handling in workflows
-- [ ] Approval gates before Underboss executes plans
-- [ ] TUI inline approval/rejection
+- [x] `mob approve <bead-id>` command
+- [x] `mob reject <bead-id>` command
+- [x] `pending_approval` status handling in workflows (blocks assignment until approved)
+- [x] Approval gates before Underboss executes plans (via pending_approval status)
+- [ ] TUI inline approval/rejection (TUI feature pending)
 
 ### Merge Queue
-- [ ] Dependency-aware serial merging (respects `blocks` relationships)
-- [ ] Conflict detection and reassignment to Soldati
-- [ ] CI failure handling (mark bead blocked, notify)
-- [ ] Integration with bead completion workflow
+- [x] Dependency-aware serial merging (respects `blocks` relationships)
+- [x] Conflict detection and reassignment to Soldati
+- [x] CI failure handling (mark bead blocked, notify)
+- [x] Integration with bead completion workflow
 
 ### Git Worktree Integration
-- [ ] Auto-create worktree per bead on assignment
-- [ ] `mob/<bead-id>` branch creation
-- [ ] Wire `internal/git/` into bead workflow
-- [ ] Worktree cleanup on bead completion
+- [x] Auto-create worktree per bead on assignment
+- [x] `mob/<bead-id>` branch creation
+- [x] Wire `internal/git/` into bead workflow
+- [x] Worktree cleanup on bead completion
 
 ### Wisps (Ephemeral Beads)
 - [ ] `/tmp/mob/` or `~/mob/.mob/tmp/` storage
