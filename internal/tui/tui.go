@@ -1679,8 +1679,8 @@ func titlecaseLabel(input string) string {
 		return input
 	}
 	runes := []rune(input)
-	runes[0] = []rune(strings.ToUpper(string(runes[0])))[0]
-	return string(runes)
+	upper := []rune(strings.ToUpper(string(runes[0])))
+	return string(upper) + string(runes[1:])
 }
 
 func wrapPreserveWhitespace(text string, width int) []string {
@@ -1694,9 +1694,10 @@ func wrapPreserveWhitespace(text string, width int) []string {
 			wrapped = append(wrapped, "")
 			continue
 		}
-		for len(line) > width {
-			wrapped = append(wrapped, line[:width])
-			line = line[width:]
+		for len([]rune(line)) > width {
+			runes := []rune(line)
+			wrapped = append(wrapped, string(runes[:width]))
+			line = string(runes[width:])
 		}
 		wrapped = append(wrapped, line)
 	}

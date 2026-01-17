@@ -72,6 +72,26 @@ func TestRenderToolOutputPreservesWhitespace(t *testing.T) {
 	}
 }
 
+func TestRenderToolOutputPreservesUnicode(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.Ascii)
+	m := Model{}
+	msg := ChatMessage{Blocks: []agent.ChatContentBlock{
+		{Type: agent.ContentTypeToolUse, Name: "bash", Input: `{"command":"ls"}`, ID: "call-1"},
+		{Type: agent.ContentTypeToolResult, ID: "call-1", Text: "éééé"},
+	}}
+
+	out := m.renderAssistantMessage(msg, 9)
+	compact := strings.Map(func(r rune) rune {
+		if r == '\n' || r == ' ' {
+			return -1
+		}
+		return r
+	}, out)
+	if !strings.Contains(compact, "éééé") {
+		t.Fatalf("expected unicode preserved, got: %s", out)
+	}
+}
+
 func TestRenderContentBlockUsesParts(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.Ascii)
 	m := Model{}
