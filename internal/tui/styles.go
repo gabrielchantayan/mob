@@ -1,13 +1,11 @@
 package tui
 
 type Styles struct {
-	Primary  string
-	TabLabel string
+	Primary string
 }
 
 func NewStyles() Styles {
 	return Styles{
-		Primary:  "#fab283",
-		TabLabel: "tab",
+		Primary: "#fab283",
 	}
 }

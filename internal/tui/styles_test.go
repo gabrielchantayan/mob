@@ -1,6 +1,9 @@
 package tui
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestStylesPalette(t *testing.T) {
 	styles := NewStyles()
@@ -9,9 +12,10 @@ func TestStylesPalette(t *testing.T) {
 	}
 }
 
-func TestStylesTabLabel(t *testing.T) {
+func TestStylesHasNoTabLabel(t *testing.T) {
 	styles := NewStyles()
-	if styles.TabLabel == "" {
-		t.Fatal("tab label style missing")
+	typeOf := reflect.TypeOf(styles)
+	if _, ok := typeOf.FieldByName("TabLabel"); ok {
+		t.Fatal("tab label style should not exist")
 	}
 }
