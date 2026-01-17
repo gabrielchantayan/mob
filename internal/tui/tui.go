@@ -1505,6 +1505,27 @@ func (m Model) renderUserMessage(content string, width int, isFirst bool) string
 	return b.String()
 }
 
+func (m Model) renderAssistantFooter(msg ChatMessage, width int) string {
+	if msg.Model == "" && msg.DurationMs == 0 {
+		return ""
+	}
+
+	footer := "▣ Build"
+	if msg.Model != "" {
+		footer += " · " + formatModelName(msg.Model)
+	}
+	if msg.DurationMs > 0 {
+		footer += fmt.Sprintf(" · %.1fs", float64(msg.DurationMs)/1000.0)
+	}
+
+	return lipgloss.NewStyle().
+		Foreground(textMutedColor).
+		Background(bgColor).
+		PaddingLeft(3).
+		Width(width).
+		Render(footer)
+}
+
 func (m Model) renderAssistantMessage(msg ChatMessage, width int) string {
 	var b strings.Builder
 
@@ -1512,26 +1533,9 @@ func (m Model) renderAssistantMessage(msg ChatMessage, width int) string {
 		b.WriteString(m.renderContentBlock(block, width))
 	}
 
-	// Footer with model and timing - OpenCode style: "▣ Mode · model · duration"
-	// paddingLeft 3 to match text parts
-	if msg.Model != "" || msg.DurationMs > 0 {
-		// Build footer content
-		footerContent := "▣ Build"
-		if msg.Model != "" {
-			footerContent += " · " + formatModelName(msg.Model)
-		}
-		if msg.DurationMs > 0 {
-			footerContent += fmt.Sprintf(" · %.1fs", float64(msg.DurationMs)/1000.0)
-		}
-
-		// Style the entire footer line with background filling the width
-		footerStyle := lipgloss.NewStyle().
-			Foreground(textMutedColor).
-			Background(bgColor).
-			PaddingLeft(3).
-			Width(width)
-
-		b.WriteString("\n" + footerStyle.Render(footerContent) + "\n")
+	footer := m.renderAssistantFooter(msg, width)
+	if footer != "" {
+		b.WriteString("\n" + footer + "\n")
 	}
 
 	return b.String()

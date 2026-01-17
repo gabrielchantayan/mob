@@ -4,7 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/gabe/mob/internal/agent"
+	"github.com/muesli/termenv"
 )
 
 func TestBuildAssistantPartsOrders(t *testing.T) {
@@ -28,5 +30,15 @@ func TestBuildAssistantPartsOrders(t *testing.T) {
 	}
 	if parts[2].Type != partText || !strings.Contains(parts[2].Text, "done") {
 		t.Fatalf("expected text part last")
+	}
+}
+
+func TestRenderAssistantFooter(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.Ascii)
+	m := Model{}
+	msg := ChatMessage{Model: "claude-3-5-sonnet", DurationMs: 1200}
+	out := m.renderAssistantFooter(msg, 60)
+	if !strings.Contains(out, "▣ Build") || !strings.Contains(out, "sonnet") {
+		t.Fatalf("footer missing expected tokens: %s", out)
 	}
 }
