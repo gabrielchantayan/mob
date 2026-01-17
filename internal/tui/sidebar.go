@@ -7,5 +7,5 @@ func NewSidebar() Sidebar {
 }
 
 func (Sidebar) View() string {
-	return ""
+	return "Sidebar"
 }

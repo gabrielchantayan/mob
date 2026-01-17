@@ -7,5 +7,5 @@ func NewAgentsTab() AgentsTab {
 }
 
 func (AgentsTab) View() string {
-	return ""
+	return "Agents"
 }

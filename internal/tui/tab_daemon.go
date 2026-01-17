@@ -7,5 +7,5 @@ func NewDaemonTab() DaemonTab {
 }
 
 func (DaemonTab) View() string {
-	return ""
+	return "Daemon"
 }

@@ -13,6 +13,10 @@ func TestToastQueue(t *testing.T) {
 	if !ok || peek.Message != "first" {
 		t.Fatal("expected first toast")
 	}
+	emptyPeek, ok := NewToastQueue().Peek()
+	if ok || emptyPeek.Message != "" {
+		t.Fatal("expected empty peek")
+	}
 	popped, ok := queue.Pop()
 	if !ok || popped.Message != "first" {
 		t.Fatal("expected pop first toast")

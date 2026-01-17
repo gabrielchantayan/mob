@@ -7,5 +7,5 @@ func NewAgentOutputTab() AgentOutputTab {
 }
 
 func (AgentOutputTab) View() string {
-	return ""
+	return "Agent Output"
 }
