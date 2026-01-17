@@ -361,13 +361,21 @@ func (d *Daemon) nudgeAgent(name string) {
 	}()
 }
 
-// nudgeAllAgents sends a nudge to all active agents to keep them working.
+// nudgeAllAgents sends a nudge to agents that have tasks assigned.
 // This is called every 5 minutes to prevent agents from getting stuck.
+// Only nudges agents that have work (hook with assignment or non-idle status).
 func (d *Daemon) nudgeAllAgents() {
+	// First, try to assign work to any idle agents
+	d.assignWorkToIdleAgents()
+
 	d.mu.RLock()
 	agents := make(map[string]*agent.Agent)
+	hookMgrs := make(map[string]*hook.Manager)
 	for name, a := range d.activeAgents {
 		agents[name] = a
+		if mgr, ok := d.hookManagers[name]; ok {
+			hookMgrs[name] = mgr
+		}
 	}
 	d.mu.RUnlock()
 
@@ -375,12 +383,44 @@ func (d *Daemon) nudgeAllAgents() {
 		return
 	}
 
-	d.logger.Printf("Nudge: sending nudge to %d active agents\n", len(agents))
+	// Get agent statuses from registry
+	agentRecords, err := d.registry.ListByType("soldati")
+	if err != nil {
+		d.logger.Printf("Nudge: failed to list agents: %v\n", err)
+		return
+	}
 
+	statusMap := make(map[string]string)
+	for _, rec := range agentRecords {
+		statusMap[rec.Name] = rec.Status
+	}
+
+	nudgeCount := 0
 	for name, a := range agents {
 		if !a.IsRunning() {
 			continue
 		}
+
+		// Check if agent has work: either has a hook or is not idle
+		hasWork := false
+
+		// Check hook
+		if mgr, ok := hookMgrs[name]; ok {
+			if h, _ := mgr.Read(); h != nil {
+				hasWork = true
+			}
+		}
+
+		// Check status - if active/working, they have work
+		if status, ok := statusMap[name]; ok && status != "idle" {
+			hasWork = true
+		}
+
+		if !hasWork {
+			continue
+		}
+
+		nudgeCount++
 		// Send a message to the agent via Chat() - this uses --resume to continue the session
 		go func(name string, a *agent.Agent) {
 			d.logger.Printf("Nudge: nudging soldati '%s'\n", name)
@@ -389,6 +429,10 @@ func (d *Daemon) nudgeAllAgents() {
 				d.logger.Printf("Nudge: failed to nudge soldati '%s': %v\n", name, err)
 			}
 		}(name, a)
+	}
+
+	if nudgeCount > 0 {
+		d.logger.Printf("Nudge: sent nudge to %d agents with active work\n", nudgeCount)
 	}
 }
 
