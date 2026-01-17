@@ -1541,6 +1541,16 @@ func (m Model) renderAssistantMessage(msg ChatMessage, width int) string {
 	return b.String()
 }
 
+func (m Model) renderContentBlock(block agent.ChatContentBlock, width int) string {
+	var b strings.Builder
+
+	for _, part := range buildAssistantParts([]agent.ChatContentBlock{block}) {
+		b.WriteString(m.renderAssistantPart(part, width))
+	}
+
+	return b.String()
+}
+
 func (m Model) renderAssistantPart(part chatPart, width int) string {
 	var b strings.Builder
 

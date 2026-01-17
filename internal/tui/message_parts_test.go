@@ -57,3 +57,13 @@ func TestRenderAssistantToolOutput(t *testing.T) {
 		t.Fatalf("expected tool output to render, got: %s", out)
 	}
 }
+
+func TestRenderContentBlockUsesParts(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.Ascii)
+	m := Model{}
+	block := agent.ChatContentBlock{Type: agent.ContentTypeText, Text: "hello"}
+	out := m.renderContentBlock(block, 40)
+	if !strings.Contains(out, "hello") {
+		t.Fatalf("expected content block text, got: %s", out)
+	}
+}
