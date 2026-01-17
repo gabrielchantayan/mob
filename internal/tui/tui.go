@@ -188,12 +188,12 @@ func New() Model {
 
 	// Initialize textarea for multiline input
 	ti := textarea.New()
-	ti.Placeholder = "Type a message... (Ctrl+Enter to send)"
+	ti.Placeholder = "Type a message... (Enter to send, Shift+Enter for newline)"
 	ti.CharLimit = 10000
 	ti.SetWidth(80)
 	ti.SetHeight(minInputHeight) // Start small, grows dynamically
 	ti.ShowLineNumbers = false
-	ti.KeyMap.InsertNewline.SetKeys("enter") // Enter adds newline, like opencode
+	ti.KeyMap.InsertNewline.SetKeys("shift+enter", "ctrl+enter", "alt+enter") // Enter sends, others add newline
 
 	// Set textarea styles to match the panel background
 	ti.FocusedStyle.Base = panelBaseStyle
@@ -494,8 +494,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc":
 				m.chatInput.Blur()
 				return m, nil
-			case "ctrl+enter":
-				// Ctrl+Enter sends the message
+			case "enter":
+				if m.slashVisible {
+					m.applySlashSelection()
+					return m, nil
+				}
+				// Enter sends the message
 				if !m.chatWaiting && strings.TrimSpace(m.chatInput.Value()) != "" {
 					return m, m.sendMessage()
 				}
@@ -508,11 +512,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "down":
 				if m.slashVisible {
 					m.slashIndex = NextSlashIndex(m.slashIndex, len(m.filteredSlashCommands()), 1)
-					return m, nil
-				}
-			case "enter":
-				if m.slashVisible {
-					m.applySlashSelection()
 					return m, nil
 				}
 			// Scroll keybindings while input is focused
@@ -1958,8 +1957,8 @@ func (m Model) renderHelp() string {
 				key  string
 				desc string
 			}{
-				{"enter", "newline"},
-				{"ctrl+enter", "send"},
+				{"enter", "send"},
+				{"shift+enter", "newline"},
 				{"ctrl+j/k", "scroll"},
 				{"ctrl+u/d", "½page"},
 				{"esc", "cancel"},

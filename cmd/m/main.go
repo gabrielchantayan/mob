@@ -4,15 +4,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 )
 
 // m is a short alias wrapper for the mob command
 // Usage: m <command> <args>
 // Examples:
-//   m a "Fix bug"          -> mob add "Fix bug"
-//   m s                     -> mob status
-//   m soldati ls           -> mob soldati ls
+//
+//	m a "Fix bug"          -> mob add "Fix bug"
+//	m s                     -> mob status
+//	m soldati ls           -> mob soldati ls
 func main() {
 	if len(os.Args) < 2 {
 		// No args, just run mob
