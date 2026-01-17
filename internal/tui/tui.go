@@ -34,7 +34,7 @@ func NewModel() Model {
 var ErrNotImplemented = errors.New("tui not implemented")
 
 func (m Model) View() string {
-	return "[Chat]"
+	return "[Chat] [Daemon] [Agent Output] [Agents]"
 }
 
 func Run() error {

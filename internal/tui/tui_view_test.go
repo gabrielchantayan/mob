@@ -8,7 +8,10 @@ import (
 func TestViewIncludesTabs(t *testing.T) {
 	m := NewModel()
 	view := m.View()
-	if !strings.Contains(view, "[Chat]") {
-		t.Fatal("missing tabs")
+	required := []string{"[Chat]", "[Daemon]", "[Agent Output]", "[Agents]"}
+	for _, label := range required {
+		if !strings.Contains(view, label) {
+			t.Fatalf("missing tab %s", label)
+		}
 	}
 }
