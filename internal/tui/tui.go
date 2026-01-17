@@ -65,13 +65,21 @@ const (
 // Tool name to icon mapping
 var toolIcons = map[string]string{
 	"Bash":      iconBash,
+	"bash":      iconBash,
 	"Read":      iconRead,
+	"read":      iconRead,
 	"Grep":      iconSearch,
+	"grep":      iconSearch,
 	"Glob":      iconSearch,
+	"glob":      iconSearch,
 	"Write":     iconWrite,
+	"write":     iconWrite,
 	"Edit":      iconWrite,
+	"edit":      iconWrite,
 	"TodoWrite": iconTask,
+	"todowrite": iconTask,
 	"Task":      iconTask,
+	"task":      iconTask,
 }
 
 // ChatMessage represents a message in the chat history
@@ -291,10 +299,12 @@ func (m *Model) updateLayout() {
 	}
 	m.daemonLogViewport.Width = mainWidth - 4
 	m.daemonLogViewport.Height = daemonViewportHeight
+	m.daemonLogViewport.SetYOffset(maxInt(0, m.daemonLogViewport.TotalLineCount()-daemonViewportHeight))
 
 	// Update agent output viewport dimensions (same as daemon log)
 	m.agentOutputViewport.Width = mainWidth - 4
 	m.agentOutputViewport.Height = daemonViewportHeight
+	m.agentOutputViewport.SetYOffset(maxInt(0, m.agentOutputViewport.TotalLineCount()-daemonViewportHeight))
 }
 
 // updateInputHeight adjusts textarea height based on content lines
@@ -1211,6 +1221,13 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
+func maxInt(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 // loadDaemonLogs reads the daemon log file and updates the viewport
 func (m *Model) loadDaemonLogs() {
 	content, err := os.ReadFile(m.daemonLogFile)
@@ -1544,7 +1561,7 @@ func (m Model) renderChat() string {
 
 func (m Model) renderChatHistory() string {
 	if len(m.chatMessages) == 0 && !m.chatWaiting {
-		return mutedStyle.Render("Start a conversation with the Underboss...")
+		return mutedStyle.Render("Start a conversation...")
 	}
 
 	var b strings.Builder
@@ -1564,12 +1581,16 @@ func (m Model) renderChatHistory() string {
 
 	// Show current streaming blocks if waiting
 	if m.chatWaiting && len(m.currentBlocks) > 0 {
-		for _, part := range buildAssistantParts(m.currentBlocks) {
+		parts := buildAssistantParts(m.currentBlocks)
+		for _, part := range parts {
+			if part.Type == partText {
+				b.WriteString(textPartMarginTop())
+			}
 			b.WriteString(m.renderAssistantPart(part, width))
 		}
 	}
 
-	return b.String()
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func (m Model) renderUserMessage(content string, width int, isFirst bool) string {
@@ -1649,7 +1670,11 @@ func (m Model) renderAssistantFooter(msg ChatMessage, width int) string {
 func (m Model) renderAssistantMessage(msg ChatMessage, width int) string {
 	var b strings.Builder
 
-	for _, part := range buildAssistantParts(msg.Blocks) {
+	parts := buildAssistantParts(msg.Blocks)
+	for _, part := range parts {
+		if part.Type == partText {
+			b.WriteString(textPartMarginTop())
+		}
 		b.WriteString(m.renderAssistantPart(part, width))
 	}
 
@@ -1690,6 +1715,11 @@ func (m Model) renderAssistantPart(part chatPart, width int) string {
 			Background(bgColor).
 			Render(borderChar)
 
+		content := strings.TrimSpace(part.Text)
+		if content == "" {
+			break
+		}
+
 		// Header: "_Thinking:_" prefix like OpenCode
 		header := "_Thinking:_ "
 		if part.Summary != "" {
@@ -1705,31 +1735,31 @@ func (m Model) renderAssistantPart(part chatPart, width int) string {
 		b.WriteString(lineStyle.Render(border+"  "+headerStyled) + "\n")
 
 		// Thinking content (muted, wrapped) - paddingLeft 2 from border
-		if part.Text != "" {
-			lines := strings.Split(wrapText(part.Text, width-6), "\n")
-			for _, line := range lines {
-				styledLine := lipgloss.NewStyle().Foreground(textMutedColor).Italic(true).Render(line)
-				b.WriteString(lineStyle.Render(border+"  "+styledLine) + "\n")
-			}
+		lines := strings.Split(wrapText(content, width-6), "\n")
+		for _, line := range lines {
+			styledLine := lipgloss.NewStyle().Foreground(textMutedColor).Italic(true).Render(line)
+			b.WriteString(lineStyle.Render(border+"  "+styledLine) + "\n")
 		}
 
 	case partTool:
 		b.WriteString(m.renderAssistantTool(part, width))
 
 	case partText:
-		// OpenCode TextPart: paddingLeft 3, marginTop 1
-		// marginTop 1
-		b.WriteString(lineStyle.Render("") + "\n")
+		content := strings.TrimSpace(part.Text)
+		if content == "" {
+			break
+		}
 
-		textLineStyle := lipgloss.NewStyle().
+		// OpenCode TextPart: paddingLeft 3, marginTop 1
+		lineStyle := lipgloss.NewStyle().
 			Foreground(textColor).
 			Background(bgColor).
 			PaddingLeft(3).
 			Width(width)
 
-		lines := strings.Split(wrapText(part.Text, width-6), "\n")
+		lines := strings.Split(wrapText(content, width-6), "\n")
 		for _, line := range lines {
-			b.WriteString(textLineStyle.Render(line) + "\n")
+			b.WriteString(lineStyle.Render(line) + "\n")
 		}
 	}
 
@@ -1741,36 +1771,38 @@ func (m Model) renderAssistantTool(part chatPart, width int) string {
 	if part.ToolOutput == "" {
 		icon := toolIcons[part.ToolName]
 		if icon == "" {
-			icon = "⊛"
+			icon = "⚙"
 		}
 
-		toolHeader := fmt.Sprintf("%s %s", icon, part.ToolName)
+		toolHeader := fmt.Sprintf("%s %s", icon, titlecaseLabel(part.ToolName))
 		headerStyled := lipgloss.NewStyle().
 			Foreground(textMutedColor).
 			Render(toolHeader)
 
 		desc := extractToolDescription(part.ToolInput)
 		descStyled := ""
+		prefix := "~ "
 		if desc != "" {
 			if len(desc) > width-12 {
 				desc = desc[:width-15] + "..."
 			}
 			descStyled = lipgloss.NewStyle().Foreground(textMutedColor).Render(" " + desc)
+			prefix = ""
 		}
 
 		toolLineStyle := lipgloss.NewStyle().
 			Background(bgColor).
-			PaddingLeft(6).
+			PaddingLeft(3).
 			Width(width)
 
-		return toolLineStyle.Render(headerStyled+descStyled) + "\n"
+		return toolLineStyle.Render(prefix+headerStyled+descStyled) + "\n"
 	}
 
 	// Block tool output for completed tool
 	title := fmt.Sprintf("# %s", titlecaseLabel(part.ToolName))
 	titleLine := lipgloss.NewStyle().
-		Foreground(textColor).
-		Background(bgElementColor).
+		Foreground(textMutedColor).
+		Background(bgPanelColor).
 		PaddingLeft(3).
 		PaddingTop(1).
 		PaddingBottom(1).
@@ -1779,7 +1811,7 @@ func (m Model) renderAssistantTool(part chatPart, width int) string {
 
 	bodyStyle := lipgloss.NewStyle().
 		Foreground(textColor).
-		Background(bgElementColor).
+		Background(bgPanelColor).
 		PaddingLeft(3).
 		PaddingRight(1).
 		Width(width)
@@ -1791,7 +1823,15 @@ func (m Model) renderAssistantTool(part chatPart, width int) string {
 		body.WriteString("\n")
 	}
 
-	return titleLine + "\n" + strings.TrimRight(body.String(), "\n") + "\n"
+	block := lipgloss.NewStyle().
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderLeft(true).
+		BorderForeground(bgColor).
+		Background(bgPanelColor).
+		MarginTop(1).
+		Render(titleLine + "\n" + strings.TrimRight(body.String(), "\n"))
+
+	return block + "\n"
 }
 
 func titlecaseLabel(input string) string {
@@ -1926,6 +1966,10 @@ func wrapText(text string, width int) string {
 	}
 
 	return result.String()
+}
+
+func textPartMarginTop() string {
+	return "\n"
 }
 
 func (m Model) renderHelp() string {
