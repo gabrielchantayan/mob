@@ -52,11 +52,11 @@ Features specified in SPEC.md that are not yet implemented.
 - [ ] Underboss continuity across context recycling
 
 ### CLI Commands Missing
-- [ ] `mob logs [bead-id]` - view work logs
-- [ ] `mob pause [--hard]` - pause system (graceful or hard)
-- [ ] `mob resume` - resume from pause
-- [ ] `mob soldati attach <name>` - attach to session (observe/message/control)
-- [ ] Short aliases (`m a` = `mob add`, `m s` = `mob status`, etc.)
+- [x] `mob logs [bead-id]` - view work logs
+- [x] `mob pause [--hard]` - pause system (graceful or hard)
+- [x] `mob resume` - resume from pause
+- [x] `mob soldati attach <name>` - attach to session (basic implementation, full stdio attach deferred)
+- [x] Short aliases (`m a` = `mob add`, `m s` = `mob status`, etc.)
 
 ### TUI Features Missing
 - [ ] Dashboard tab
