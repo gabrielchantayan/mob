@@ -1,6 +1,10 @@
 package tui
 
-import "errors"
+import (
+	"errors"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 const (
 	TabChat = iota
@@ -33,10 +37,24 @@ func NewModel() Model {
 
 var ErrNotImplemented = errors.New("tui not implemented")
 
+var startProgram = func(model tea.Model) error {
+	program := tea.NewProgram(model)
+	_, err := program.Run()
+	return err
+}
+
+func (m Model) Init() tea.Cmd {
+	return nil
+}
+
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	return m, nil
+}
+
 func (m Model) View() string {
 	return "[Chat] [Daemon] [Agent Output] [Agents]"
 }
 
 func Run() error {
-	return ErrNotImplemented
+	return startProgram(NewModel())
 }
