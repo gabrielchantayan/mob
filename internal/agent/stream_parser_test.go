@@ -16,3 +16,20 @@ func TestParseToolResultBlock(t *testing.T) {
 		t.Fatalf("unexpected tool_result block: %+v", blocks[0])
 	}
 }
+
+func TestParseStreamBlocksDelta(t *testing.T) {
+	lines := []string{
+		`{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello "}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"world"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_stop","index":0}}`,
+	}
+
+	blocks := parseStreamBlocks(lines)
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block")
+	}
+	if blocks[0].Type != ContentTypeText || blocks[0].Text != "hello world" {
+		t.Fatalf("unexpected delta text: %+v", blocks[0])
+	}
+}
