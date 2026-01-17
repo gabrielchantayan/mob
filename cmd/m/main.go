@@ -70,7 +70,14 @@ func expandAlias(alias string) string {
 
 // runMob executes the mob command with the given arguments
 func runMob(args []string) {
-	cmd := exec.Command("mob", args...)
+	// Look for mob in PATH first, fall back to local ./mob if not found
+	mobPath, err := exec.LookPath("mob")
+	if err != nil {
+		// Try local ./mob binary
+		mobPath = "./mob"
+	}
+
+	cmd := exec.Command(mobPath, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
