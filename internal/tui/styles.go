@@ -5,11 +5,12 @@ import "github.com/charmbracelet/lipgloss"
 // OpenCode theme colors (dark mode)
 var (
 	// Background scale
-	bgColor        = lipgloss.Color("#0a0a0a") // darkStep1 - main background
-	bgPanelColor   = lipgloss.Color("#141414") // darkStep2 - panel background
-	bgElementColor = lipgloss.Color("#1e1e1e") // darkStep3 - element background
-	bgStep4        = lipgloss.Color("#282828") // darkStep4
-	bgStep5        = lipgloss.Color("#323232") // darkStep5
+	bgColor             = lipgloss.Color("#0a0a0a") // darkStep1 - main background
+	bgPanelColor        = lipgloss.Color("#141414") // darkStep2 - panel background
+	bgElementColor      = lipgloss.Color("#1e1e1e") // darkStep3 - element background
+	bgStep4             = lipgloss.Color("#282828") // darkStep4
+	bgStep5             = lipgloss.Color("#323232") // darkStep5
+	backgroundMenuColor = lipgloss.Color("#1e1e1e") // darkStep3 - menu background
 
 	// Border colors
 	borderSubtleColor = lipgloss.Color("#3c3c3c") // darkStep6
