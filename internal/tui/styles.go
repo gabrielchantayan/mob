@@ -92,7 +92,7 @@ var (
 
 	// Card/panel style
 	panelStyle = lipgloss.NewStyle().
-			Background(bgPanelColor).
+			Background(backgroundMenuColor).
 			Padding(1, 2).
 			BorderStyle(lipgloss.RoundedBorder()).
 			BorderForeground(borderSubtleColor)

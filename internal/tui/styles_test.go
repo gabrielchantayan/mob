@@ -13,4 +13,7 @@ func TestOpencodePalette(t *testing.T) {
 	if backgroundMenuColor != lipgloss.Color("#1e1e1e") {
 		t.Fatalf("unexpected backgroundMenuColor: %v", backgroundMenuColor)
 	}
+	if got := panelStyle.GetBackground(); got != backgroundMenuColor {
+		t.Fatalf("unexpected panelStyle background: %v", got)
+	}
 }
