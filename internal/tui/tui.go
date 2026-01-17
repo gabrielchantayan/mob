@@ -33,6 +33,10 @@ func NewModel() Model {
 
 var ErrNotImplemented = errors.New("tui not implemented")
 
+func (m Model) View() string {
+	return "[Chat]"
+}
+
 func Run() error {
 	return ErrNotImplemented
 }
