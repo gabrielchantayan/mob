@@ -1,5 +1,7 @@
 package tui
 
+import "errors"
+
 const (
 	TabChat = iota
 	TabDaemon
@@ -29,6 +31,8 @@ func NewModel() Model {
 	}
 }
 
+var ErrNotImplemented = errors.New("tui not implemented")
+
 func Run() error {
-	return nil
+	return ErrNotImplemented
 }
