@@ -152,7 +152,6 @@ type Model struct {
 	slashCommands []SlashCommand
 	slashIndex    int
 	slashVisible  bool
-	slashQuery    string
 
 	// Agent records from registry
 	agentRecords []*registry.AgentRecord
@@ -238,7 +237,6 @@ func New() Model {
 		},
 		slashIndex:          0,
 		slashVisible:        false,
-		slashQuery:          "",
 		daemonLogViewport:   daemonVp,
 		daemonLogLines:      []string{},
 		daemonLogFile:       filepath.Join(mobDir, ".mob", "daemon.log"),
@@ -848,10 +846,6 @@ func (m *Model) updateSlashVisibility() {
 	if strings.HasPrefix(trimmed, "/") {
 		matches := FilterSlashCommands(m.slashCommands, trimmed)
 		m.slashVisible = len(matches) > 0
-		if trimmed != m.slashQuery {
-			m.slashIndex = 0
-			m.slashQuery = trimmed
-		}
 		if m.slashIndex >= len(matches) {
 			m.slashIndex = 0
 		}
@@ -859,7 +853,6 @@ func (m *Model) updateSlashVisibility() {
 	}
 
 	m.slashVisible = false
-	m.slashQuery = ""
 }
 
 func (m *Model) filteredSlashCommands() []SlashCommand {
