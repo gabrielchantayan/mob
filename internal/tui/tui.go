@@ -1578,7 +1578,7 @@ func (m Model) renderAssistantPart(part chatPart, width int) string {
 		if part.Text != "" {
 			lines := strings.Split(wrapText(part.Text, width-6), "\n")
 			for _, line := range lines {
-				styledLine := lipgloss.NewStyle().Foreground(textMutedColor).Render(line)
+				styledLine := lipgloss.NewStyle().Foreground(textMutedColor).Italic(true).Render(line)
 				b.WriteString(lineStyle.Render(border+"  "+styledLine) + "\n")
 			}
 		}
