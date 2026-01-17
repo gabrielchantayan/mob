@@ -149,6 +149,10 @@ type Model struct {
 	underboss     *underboss.Underboss
 	mobDir        string
 
+	slashCommands []SlashCommand
+	slashIndex    int
+	slashVisible  bool
+
 	// Agent records from registry
 	agentRecords []*registry.AgentRecord
 
@@ -216,17 +220,23 @@ func New() Model {
 	ti.Focus()
 
 	m := Model{
-		activeTab:           tabChat, // Chat-first
-		sidebarVisible:      true,
-		sidebarWidth:        sidebarWidthConst,
-		sessionStartTime:    time.Now(),
-		daemonStatus:        "unknown",
-		chatInput:           ti,
-		chatViewport:        vp,
-		chatMessages:        []ChatMessage{},
-		currentBlocks:       []agent.ChatContentBlock{},
-		underboss:           ub,
-		mobDir:              mobDir,
+		activeTab:        tabChat, // Chat-first
+		sidebarVisible:   true,
+		sidebarWidth:     sidebarWidthConst,
+		sessionStartTime: time.Now(),
+		daemonStatus:     "unknown",
+		chatInput:        ti,
+		chatViewport:     vp,
+		chatMessages:     []ChatMessage{},
+		currentBlocks:    []agent.ChatContentBlock{},
+		underboss:        ub,
+		mobDir:           mobDir,
+		slashCommands: []SlashCommand{
+			{Name: "new", Description: "New chat", Shortcut: "Ctrl+N"},
+			{Name: "status", Description: "Status"},
+		},
+		slashIndex:          0,
+		slashVisible:        false,
 		daemonLogViewport:   daemonVp,
 		daemonLogLines:      []string{},
 		daemonLogFile:       filepath.Join(mobDir, ".mob", "daemon.log"),
@@ -465,6 +475,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		// Handle chat input when on chat tab
 		if m.activeTab == tabChat && m.chatInput.Focused() {
+			m.updateSlashVisibility()
+
 			// Handle paste events with CRLF normalization
 			if msg.Paste {
 				normalized := strings.ReplaceAll(string(msg.Runes), "\r\n", "\n")
@@ -488,6 +500,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.sendMessage()
 				}
 				return m, nil
+			case "up":
+				if m.slashVisible {
+					m.slashIndex = NextSlashIndex(m.slashIndex, len(m.filteredSlashCommands()), -1)
+					return m, nil
+				}
+			case "down":
+				if m.slashVisible {
+					m.slashIndex = NextSlashIndex(m.slashIndex, len(m.filteredSlashCommands()), 1)
+					return m, nil
+				}
+			case "enter":
+				if m.slashVisible {
+					m.applySlashSelection()
+					return m, nil
+				}
 			// Scroll keybindings while input is focused
 			// Note: ctrl+j is used for newline in textarea, use ctrl+n/ctrl+p for line scroll
 			case "ctrl+n":
@@ -512,9 +539,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Update text input
 			var cmd tea.Cmd
 			m.chatInput, cmd = m.chatInput.Update(msg)
+			m.updateSlashVisibility()
 			// Dynamically adjust height based on content
 			m.updateInputHeight()
 			return m, cmd
+
 		}
 
 		// Normal navigation when not typing
@@ -525,21 +554,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tab", "right", "l":
 			m.activeTab = (m.activeTab + 1) % tab(len(tabNames))
 			m.updateFocus()
+			m.slashVisible = false
 		case "shift+tab", "left", "h":
 			m.activeTab = (m.activeTab - 1 + tab(len(tabNames))) % tab(len(tabNames))
 			m.updateFocus()
+			m.slashVisible = false
 		case "1":
 			m.activeTab = tabChat
 			m.updateFocus()
+			m.slashVisible = false
 		case "2":
 			m.activeTab = tabDaemon
 			m.updateFocus()
+			m.slashVisible = false
 		case "3":
 			m.activeTab = tabAgentOutput
 			m.updateFocus()
+			m.slashVisible = false
 		case "4":
 			m.activeTab = tabAgents
 			m.updateFocus()
+			m.slashVisible = false
 		case "s":
 			// Toggle sidebar (only if terminal is wide enough)
 			if m.width >= minWidthForSidebar {
@@ -773,6 +808,7 @@ func (m *Model) sendMessage() tea.Cmd {
 func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 	m.chatInput.Reset()
 	m.updateInputHeight()
+	m.slashVisible = false
 
 	// Parse the command (remove leading slash, get first word)
 	parts := strings.Fields(strings.TrimPrefix(cmd, "/"))
@@ -789,11 +825,90 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 		m.underboss.ClearSession()
 		m.updateChatViewport()
 		return nil
+	case "status":
+		m.chatError = fmt.Sprintf("Status: %s", m.daemonStatus)
+		return nil
 	default:
 		// Unknown command - show error briefly
 		m.chatError = fmt.Sprintf("Unknown command: /%s", parts[0])
 		return nil
 	}
+}
+
+func (m *Model) updateSlashVisibility() {
+	if m.activeTab != tabChat || !m.chatInput.Focused() {
+		m.slashVisible = false
+		return
+	}
+
+	input := m.chatInput.Value()
+	trimmed := strings.TrimSpace(input)
+	if strings.HasPrefix(trimmed, "/") {
+		matches := FilterSlashCommands(m.slashCommands, trimmed)
+		m.slashVisible = len(matches) > 0
+		if m.slashIndex >= len(matches) {
+			m.slashIndex = 0
+		}
+		return
+	}
+
+	m.slashVisible = false
+}
+
+func (m *Model) filteredSlashCommands() []SlashCommand {
+	return FilterSlashCommands(m.slashCommands, strings.TrimSpace(m.chatInput.Value()))
+}
+
+func (m *Model) applySlashSelection() {
+	matches := m.filteredSlashCommands()
+	if len(matches) == 0 {
+		m.slashVisible = false
+		return
+	}
+	if m.slashIndex >= len(matches) {
+		m.slashIndex = 0
+	}
+
+	selected := matches[m.slashIndex]
+	m.chatInput.SetValue("/" + selected.Name + " ")
+	m.slashVisible = false
+	m.updateInputHeight()
+}
+
+func (m Model) renderSlashPopover(width int) string {
+	matches := m.filteredSlashCommands()
+	if len(matches) == 0 {
+		return ""
+	}
+
+	popoverStyle := lipgloss.NewStyle().
+		Background(bgPanelColor).
+		Padding(1, 2).
+		Width(width)
+	muted := popoverStyle.Foreground(textMutedColor)
+	selectedStyle := popoverStyle.Foreground(textColor).Background(bgElementColor)
+
+	var b strings.Builder
+	for i, cmd := range matches {
+		label := "/" + cmd.Name
+		if cmd.Shortcut != "" {
+			label += " · " + cmd.Shortcut
+		}
+		row := label
+		if cmd.Description != "" {
+			row += " — " + cmd.Description
+		}
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		if i == m.slashIndex {
+			b.WriteString(selectedStyle.Render(row))
+		} else {
+			b.WriteString(muted.Render(row))
+		}
+	}
+
+	return b.String()
 }
 
 // listenForStreamUpdates returns a command that waits for the next stream update
@@ -1411,6 +1526,11 @@ func (m Model) renderChat() string {
 		}
 		// Render each line with the footer style to ensure full width background
 		footerBuilder.WriteString(footerStyle.Render(line))
+	}
+
+	if m.slashVisible {
+		footerBuilder.WriteString("\n")
+		footerBuilder.WriteString(m.renderSlashPopover(inputWidth))
 	}
 
 	// Add accent bar to the whole footer
